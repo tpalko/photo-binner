@@ -1,0 +1,5 @@
+#adb
+exifread
+click
+pytz
+ConfigParser
