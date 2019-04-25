@@ -3,3 +3,4 @@ exifread
 click
 pytz
 ConfigParser
+hashbrowns

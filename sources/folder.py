@@ -12,8 +12,13 @@ def classdef():
 
 class Folder(Source):
 
-    def verify(self, mask="*", from_date=None):
-        return self._is_not_empty(mask)
+    def sigint_handler(self):
+        def handler(sig, frame):
+            pass
+        return handler
 
-    def paths(self, mask="*", from_date=None):
-        return self._paths(mask)
+    def verify(self):
+        return self._is_not_empty()
+
+    def paths(self):
+        return self._paths()

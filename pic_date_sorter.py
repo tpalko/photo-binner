@@ -2,22 +2,25 @@
 
 import os
 import sys
+import signal
 from  datetime import datetime, timedelta
 from pytz import timezone
 import click
 import logging
 import re
-import hashlib
+#import hashlib
+from hashbrowns import hash_equal
 import shutil
 import pprint
 from exifwrapper import ExifWrapper
 import json
 from source import Source
-from logescrow import LogEscrow
 import importlib
 import glob
 from ConfigParser import ConfigParser
 from logescrow import LogEscrow
+from pwd import getpwnam
+#from grp import getgrnam
 
 '''
 If debug, show file heading and any indented debug lines for all files
@@ -39,6 +42,7 @@ IMAGE_MAKERS = ['Apple']
 DEFAULT_TARGET = config.defaults()['target']
 DEFAULT_MASK = "*"
 EXACT_MATCHES_FOLDER = config.get('folders', 'exact_matches')
+COPY_EXACT_MATCHES = config.getboolean('folders', 'copy_exact_matches')
 
 UTC = timezone("UTC")
 TZ = timezone(config.get('locale', 'timezone'))
@@ -46,6 +50,11 @@ EPOCH = datetime(1970, 1, 1)
 UTC_EPOCH = UTC.localize(EPOCH)
 LOCAL_EPOCH = UTC_EPOCH.astimezone(TZ)
 DEFAULT_YEARS = [1970, 1980]
+
+OWNER_UID = os.getuid()
+if 'owner' in config.defaults():
+    OWNER_UID = getpwnam(config.defaults()['owner'])[2]
+#GROUP = getgrnam(config.defaults()['group'] or os.getgid())[2]
 
 # INBOX_PATHS = [
 #     '/media/storage/pics/mobile_inbox',
@@ -60,7 +69,12 @@ RUN_STATS = {
 
 class PhotoBinner(object):
 
+    dry_run = False
+    preserve_folders = 0
+
     def __init__(self, *args, **kwargs):
+        for k in kwargs:
+            self.__setattr__(k, kwargs[k])
         self.log_escrow = LogEscrow(name=__name__)
 
     def _push_run_stat(self, type, key, value):
@@ -83,20 +97,15 @@ class PhotoBinner(object):
         #     base = 0
         # base = base + 1
 
-    # - http://stackoverflow.com/questions/3431825/generating-an-md5-checksum-of-a-file
-    def _md5(self, fname):
-        hash_md5 = hashlib.md5()
-        with open(fname, "rb") as f:
-            for chunk in iter(lambda: f.read(4096), b""):
-                hash_md5.update(chunk)
-        return hash_md5.hexdigest()
-
-    def move(self, src, dest, time_tuple):
+    def move(self, src, dest, time_tuple=None):
         shutil.move(src, dest)
-        os.utime(dest, (time_tuple[0], time_tuple[1]))
+        if time_tuple:
+            os.utime(dest, (time_tuple[0], time_tuple[1]))
+        os.chown(dest, OWNER_UID, -1)
 
-    def copy(self, src, dest, time_tuple):
+    def copy(self, src, dest, time_tuple=None):
         shutil.copy2(src, dest)
+        os.chown(dest, OWNER_UID, -1)
 
     '''
     T:  Bus=02 Lev=01 Prnt=01 Port=01 Cnt=01 Dev#=  2 Spd=480 MxCh= 0
@@ -121,24 +130,47 @@ class PhotoBinner(object):
             # -- iPhone 5
             make_and_model = "%s_%s" % (all_metadata['image_make'], all_metadata['image_model'])
         else:
-            # /media/storage/pics/whackamole/IMG_0001.JPG
-            this_file = full_path.replace(mountpoint, '') if mountpoint else full_path
-            # whackamole/IMG_0001.JPG
-            parts = this_file.rpartition('/')
-            # ['whackamole', '/', 'IMG_0001.JPG']
-            self.log_escrow.debug(" - descriptive parts: %s" % parts[0])
-            descriptive = parts[0]
-            # whackamole
-            descriptive = re.sub('^\/?dupe\/[0-9]+', '', descriptive)
-            # -- remove YYYY, YYYY-MM-DD, YYYY_MM_DD, YYYYMMDD if the part is ENTIRELY that
-            non_date_descriptive = [ d for d in descriptive.split('/') if d and not re.match('^[0-9]{8}$', d) and not re.match('^[0-9]{4}$', d) and not re.match('^[0-9]{4}[-_]{1}[0-9]{2}[-_]{1}[0-9]{2}$', d) ]
-            # -- remove YYYY-MM-DD substrings
-            non_date_descriptive = [ re.sub("[0-9]{4}-[0-9]{2}-[0-9]{2}", "", d).strip() for d in non_date_descriptive ]
+            # -- /original/path/given/to/file.jpg <= full_path
+            # -- /original/path/given/to <= mountpoint
+            left_trim = mountpoint
+            # -- preserve_folders = 2 => /original/path/given
+            for i in range(self.preserve_folders):
+                left_trim = left_trim.rpartition('/')[0]
+            # -- to/file.jpg
+            base_removed = full_path.replace(left_trim, '') if left_trim else full_path
+            # -- [ 'to', '/', 'file.jpg']
+            descriptive_path = base_removed.rpartition('/')[0]
+            self.log_escrow.debug(" - descriptive path: %s" % descriptive_path)
+            # -- remove leading /dupe/nnn
+            if re.search('\/?dupe\/[0-9]+', descriptive_path):
+                descriptive_path = re.sub("\/?dupe\/[0-9]+", "", descriptive_path)
+            descriptive_folders = descriptive_path.split('/')
+
+            descriptive_remove_regexp = ['^[0-9]{8}$', '^[0-9]{4}$', '^[0-9]{4}[-_]{1}[0-9]{2}[-_]{1}[0-9]{2}$']#, '[0-9]{4}-[0-9]{2}-[0-9]{2}']
             if exclude_descriptive:
-                for e in exclude_descriptive:
-                    non_date_descriptive = [ d for d in non_date_descriptive if not re.match('^%s$' % e, d) ]
-            descriptive = "_".join([ d.replace(' ', '_') for d in non_date_descriptive ]) if len(non_date_descriptive) > 0 else None
+                descriptive_remove_regexp.extend(exclude_descriptive)
+            for r in descriptive_remove_regexp:
+                descriptive_folders = [ d for d in descriptive_folders if d and not re.match(r, d) ]
+
+            descriptive_sub_regexp = [("[0-9]{4}_[0-9]{2}_[0-9]{2}", " "), ("[0-9]{4}-[0-9]{2}-[0-9]{2}", " "), ("-", " "), ("\s{2,}", " ")]
+            for s in descriptive_sub_regexp:
+                descriptive_folders = [ re.sub(s[0], s[1], d).strip() for d in descriptive_folders if d ]
+
+            self.log_escrow.debug(" - descriptive folders: %s" % descriptive_folders)
+            tokens = []
+            for d in descriptive_folders:
+                tokens.extend([ d.strip().rstrip("_").lstrip("_") for d in d.split(' ') if d ])
+
+            self.log_escrow.debug(" - tokens: %s" % tokens)
+
+            unique_tokens = []
+            for t in tokens:
+                if t not in unique_tokens:
+                    unique_tokens.append(t)
+
+            descriptive = "_".join(unique_tokens) if len(unique_tokens) > 0 else None
             self.log_escrow.debug(" - descriptive: %s" % ( "'%s'" % descriptive if descriptive else None ))
+
         return descriptive
 
     def _extract_date_from_path(self, full_path):
@@ -147,6 +179,7 @@ class PhotoBinner(object):
         date_matches.extend([ datetime.strptime(m, '%Y_%m_%d') for m in re.findall('[0-9]{4}_{1}[0-9]{2}_{1}[0-9]{2}', path) ])
         date_matches.extend([ datetime.strptime(m, '%Y-%m-%d') for m in re.findall('[0-9]{4}-{1}[0-9]{2}-{1}[0-9]{2}', path) ])
         date_matches.sort()
+        self.log_escrow.debug(" - dates from path: %s" % [ datetime.strftime(d, "%Y-%m-%d %H:%M:%S %z") for d in date_matches ])
         return TZ.localize(date_matches[0]) if len(date_matches) > 0 else None
 
     def _extract_date_from_filename(self, full_path):
@@ -161,12 +194,18 @@ class PhotoBinner(object):
             elif filename_timestamp.find('-') > 0:
                 filename_date = TZ.localize(datetime.strptime(filename_timestamp, "%Y%m%d-%H%M%S"))
             else:
-                logger.fatal("- timestamp %s extracted from filename but datetime format not expected" % filename_timestamp)
+                logger.warn("- timestamp %s extracted from filename but datetime format not expected" % filename_timestamp)
             #calculated_timestamp = datetime.strftime(filename_date, "%Y-%m-%d %H:%M:%S")
             #calculated_date = datetime.strftime(filename_date, "%Y-%m-%d")
         else:
             self.log_escrow.debug(" - no filename match for timestamp")
         return filename_date
+
+    def _date_match(self, d1, d2):
+        return d1.year == d2.year and d1.month == d2.month and d1.day == d2.day
+
+    def _is_day_only(self, d):
+        return d.hour == 0 and d.minute == 0 and d.second == 0
 
     def _get_target_date(self, current_path):
 
@@ -187,7 +226,7 @@ class PhotoBinner(object):
 
         # - in images from iphone backups, the timestamp of the file itself is accurate
         # - while the exif metadata is incorrect and may represent the date of backup
-        # - this sequence of assignment assumes the most obvious data
+        # - the following sequence of assignment assumes the most obvious data
         # - and elects more precise data if and when it is found
         # - note that each timestamp source (stat, filename, exif)
         # - have been observed to be incorrect in at least one case
@@ -196,6 +235,9 @@ class PhotoBinner(object):
 
         stat_date_as_utc = target_date_from_stat.astimezone(UTC)
         self.log_escrow.debug(" - stat_date_as_utc: %s" % stat_date_as_utc)
+
+        # -- if the stat date, which is timezone-aware, taken as UTC equals the exif date
+        # -- then ...
         if target_date_from_exif and datetime.strftime(stat_date_as_utc, "%Y-%m-%d %H:%M") == datetime.strftime(target_date_from_exif, "%Y-%m-%d %H:%M"):
             self.log_escrow.warn(" - file date is double timezoned")
             # - basically add back (once) the hours of the local offset - it was offset twice
@@ -203,40 +245,48 @@ class PhotoBinner(object):
             target_mtime = (target_date_from_stat - LOCAL_EPOCH).total_seconds()
             self._push_run_stat('anomalies', 'file-date-double-timezoned', current_path)
 
-        target_dates = [
-            {'source': 'stat', 'date': target_date_from_stat},
-            {'source': 'filename', 'date': target_date_from_filename},
-            {'source': 'exif', 'date': target_date_from_exif}
-        ]
+        target_dates = {
+            'stat': target_date_from_stat,
+            'filename': target_date_from_filename,
+            'exif': target_date_from_exif,
+            'path': target_date_from_path
+        }
 
-        target_dates = [ d for d in target_dates if d['date'] ]
-        target_dates.sort(key=lambda x: x['date'])
-        target_dates_log = [ "%s: %s" % (t['source'], datetime.strftime(t['date'], "%Y-%m-%d %H:%M:%S %z")) for t in target_dates ]
+        # -- filter out empty or invalid values
+        target_dates = { d: target_dates[d] for d in target_dates if target_dates[d] and target_dates[d].year not in DEFAULT_YEARS }
+
+        # -- if two date sources are the same day but one lacks time, remove it
+        remove_sources = []
+        for is_day_only in target_dates:
+            if self._is_day_only(target_dates[is_day_only]):
+                for same_day in [ d for d in target_dates if d != is_day_only ]:
+                    if self._date_match(target_dates[is_day_only], target_dates[same_day]) and not self._is_day_only(target_dates[same_day]):
+                        remove_sources.append(is_day_only)
+                        self.log_escrow.debug(" - excluding %s source as it has no time information and %s matches the date" % (is_day_only, same_day))
+                        break
+        target_dates = { d: target_dates[d] for d in target_dates if d not in remove_sources }
+
+        # -- log the sorted list of candidates
+        target_dates_log = [ { t: datetime.strftime(target_dates[t], "%Y-%m-%d %H:%M:%S %z") } for t in sorted(target_dates, key=lambda x: target_dates[x]) ]
         self.log_escrow.debug(" - %s" % target_dates_log)
 
-        # - start by assuming the file is correct, and we'll refine below
-        target_date = target_date_from_stat
-        target_date_assigned_from = 'stat'
-
+        # -- accounting for the possible one-second lag between metadata and inode information
+        # -- if metadata is more recent, it suggests iPhone
         if target_date_from_exif and target_date_from_stat and (target_date_from_exif - target_date_from_stat).total_seconds() > 1:
             self.log_escrow.warn(" - exif (%s) is newer than stat (%s) - iPhone?" % (datetime.strftime(target_date_from_exif, "%Y-%m-%d %H:%M:%S %z"), datetime.strftime(target_date_from_stat, "%Y-%m-%d %H:%M:%S %z")))
             self._push_run_stat('anomalies', 'recent-exif', current_path)
 
-        # if target_date_from_path and target_date_from_path.year not in DEFAULT_YEARS \
-        #     and target_date_from_path < target_date:
-        #         target_date = target_date_from_path
-        #         target_date_assigned_from = 'path'
+        # -- order to assign dates (highest priority is last!)
+        date_source_priority = ['stat', 'path', 'filename', 'exif']
 
-        if target_date_from_filename and target_date_from_filename.year not in DEFAULT_YEARS:
-            target_date = target_date_from_filename
-            target_date_assigned_from = 'filename'
+        target_date = None
 
-        if target_date_from_exif and target_date_from_exif.year not in DEFAULT_YEARS:
-            if target_date_from_exif <= target_date or target_date.year in DEFAULT_YEARS:
-                target_date = target_date_from_exif
-                target_date_assigned_from = 'exif'
+        for source in [ d for d in date_source_priority if d in target_dates ]:
+            if not target_date or (source == 'filename' or target_dates[source] < target_date):
+                target_date = target_dates[source]
+                target_date_assigned_from = source
 
-        self.log_escrow.warn(" - target date assigned using %s: %s" % (target_date_assigned_from, datetime.strftime(target_date, "%Y-%m-%d %H:%M:%S %z")))
+        self.log_escrow.info(" - target date assigned using %s: %s" % (target_date_assigned_from, datetime.strftime(target_date, "%Y-%m-%d %H:%M:%S %z")))
         self._push_run_stat('date_sources', target_date_assigned_from, current_path)
 
         if target_date.year in DEFAULT_YEARS:
@@ -282,15 +332,19 @@ class PhotoBinner(object):
         if current_path == new_path:
             move_action = " - current path is correct, matches calculated target"
         elif os.path.exists(new_path):
-            self.log_escrow.info(" - another file exists at destination path, comparing files..")
-            if self._md5(current_path) == self._md5(new_path):
-                self.log_escrow.info(" - file at destination path is exact, moving to %s" % EXACT_MATCHES_FOLDER)
-                target_folder = EXACT_MATCHES_FOLDER
-                new_path = os.path.join(target_folder, filename)
-                move_action = "exact match at target, moving to %s" % target_folder
+            self.log_escrow.warn(" - another file exists at destination path, comparing files..")
+            if hash_equal(current_path, new_path):
+                move_necessary = COPY_EXACT_MATCHES
+                if move_necessary:
+                    self.log_escrow.warn(" - file at destination path is exact, moving to %s" % EXACT_MATCHES_FOLDER)
+                    target_folder = EXACT_MATCHES_FOLDER
+                    new_path = os.path.join(target_folder, filename)
+                    move_action = "exact match at target, moving to %s" % target_folder
+                else:
+                    self.log_escrow.warn(" - file at destination path is exact, no action")
                 self._push_run_stat('anomalies', 'content-match-at-target', current_path)
             else:
-                self.log_escrow.info(" - file at destination path is different, we have a duplicate")
+                self.log_escrow.warn(" - file at destination path is different, we have a duplicate")
                 move_necessary = True
                 dupe_count = 0
                 dupe_folder = target_folder
@@ -299,7 +353,7 @@ class PhotoBinner(object):
                     dupe_folder = os.path.join(target_folder, "dupe", str(dupe_count))
                     new_path = os.path.join(dupe_folder, filename)
                     move_action = "filename match, modifying new path -> %s" % new_path
-                    if os.path.exists(new_path) and current_path == new_path and self._md5(current_path) == self._md5(new_path):
+                    if os.path.exists(new_path) and current_path == new_path and hash_equal(current_path, new_path):
                         move_action = " - this file already exists as a duplicate"
                         move_necessary = False
                         break
@@ -312,7 +366,7 @@ class PhotoBinner(object):
 
         return (target_folder, move_necessary, move_action,)
 
-    def process_file(self, current_path, source, dry_run):
+    def process_file(self, source, current_path=None):
 
         if not current_path:
             current_path = source.mountpoint
@@ -326,13 +380,13 @@ class PhotoBinner(object):
         # - if DEBUG or INFO, logs immediately, otherwise requires a file change
         # - implies that outside the file change block, logs must be < WARN
         heading_log_event = None if self.log_escrow.logger.isEnabledFor(logging.INFO) else 'move_necessary'
-        self.log_escrow.warn("", event=heading_log_event)
-        self.log_escrow.warn("Processing %s.." % current_path, event=heading_log_event)
+        self.log_escrow.debug("", event=heading_log_event)
+        self.log_escrow.info("Processing %s.." % current_path, event=heading_log_event)
 
         (target_date, target_atime, target_mtime, new_filename, target_date_assigned_from,) = self._get_target_date(current_path)
 
         if not target_date:
-            self.log_escrow.fatal(" - no target date could be calculated")
+            self.log_escrow.warn(" - no target date could be calculated")
             return
 
         descriptive = self._extract_descriptive(current_path, source.mountpoint, source.exclude_descriptive)
@@ -352,11 +406,11 @@ class PhotoBinner(object):
 
         if move_necessary:
             self.log_escrow.release_log_escrow(trigger='move_necessary')
-            self.log_escrow.warn(" - %s" % move_action)
+            self.log_escrow.info(" - %s" % move_action)
             self._increment_run_stat('moves', current_folder=current_folder, target_folder=target_folder)
 
-            if dry_run:
-                self.log_escrow.debug(" - dry run, no action")
+            if self.dry_run:
+                self.log_escrow.info(" - dry run, no action")
             else:
                 # - actually move the file and fix timestamps
                 # - create final path
@@ -367,7 +421,7 @@ class PhotoBinner(object):
                 self.log_escrow.info(" - %s MB" % str(int(file_stats.st_size)/(1024*1024)))
                 source.transfer_method(current_path, new_path, (target_atime, target_mtime,))
         else:
-            self.log_escrow.warn(" - %s" % move_action)
+            self.log_escrow.info(" - %s" % move_action)
 
         # - calculate various companion filenames
         xmp_filename = "%s.xmp" % filename
@@ -381,22 +435,37 @@ class PhotoBinner(object):
             variant_filepath = os.path.join(current_folder, variant)
             if not os.path.exists(variant_filepath):
                 continue
-            self.log_escrow.debug(" - processing existing variant %s" % variant)
+            self.log_escrow.info(" - processing existing variant %s" % variant)
             #_log_escrow(logging.DEBUG, "    - variant exists: %s" % variant)
             new_variant_filepath = os.path.join(target_folder, variant)
-            self.log_escrow.debug("   - %s -> %s" % (variant_filepath, new_variant_filepath))
-            if not dry_run and move_necessary:
-                move(variant_filepath, new_variant_filepath)
+            self.log_escrow.info("   - %s -> %s" % (variant_filepath, new_variant_filepath))
+            if not self.dry_run and move_necessary:
+                source.transfer_method(variant_filepath, new_variant_filepath)
+
+def _load_source_types():
+    types = {}
+    for g in glob.glob("sources/*.py"):
+        if g == "sources/__init__.py":
+            continue
+        # module_name = g.replace("/", ".").rpartition(".")[0]
+        # module = importlib.import_module(module_name)
+        # source_class = module.classdef()
+        source_class = importlib.import_module(g.replace("/", ".").rpartition(".")[0]).classdef()
+        source_name = source_class().__class__.__name__
+        types[source_name] = source_class
+        Source.register(source_class)
+    return types
 
 @click.command()
 @click.option('--source', '-s', 'user_source', help='Source folder')
 @click.option('--target', '-t', 'target', default=DEFAULT_TARGET, help='Target folder, default "%s"' % DEFAULT_TARGET)
 @click.option('--mask', '-m', 'mask', default=DEFAULT_MASK, help='Filename mask, default %s' % DEFAULT_MASK)
 @click.option('--from-date', '-f', 'from_date', type=click.DateTime(), default=None, help='(Android Only) Process files only newer than this date (YYYY-MM-DD), default empty')
+@click.option('--preserve-folders', '-p', 'preserve_folders', default=0, help='Number of parent folders to preserve when extracting descriptive text')
 @click.option('--dry-run', '-d', 'dry_run', is_flag=True, help='Only print what would happen. Make no filesystem changes.')
 @click.option('--setup-only', '-o', 'setup_only', is_flag=True, help='Run everything up to the actual processing of files.')
 @click.option('--loglevel', '-l', 'loglevel', default='info', help='Logging level (debug, info, warn, error, fatal)')
-def main(user_source, target, mask, from_date, dry_run, setup_only, loglevel):
+def main(user_source, target, mask, from_date, preserve_folders, dry_run, setup_only, loglevel):
 
     '''
     use cases:
@@ -428,21 +497,12 @@ def main(user_source, target, mask, from_date, dry_run, setup_only, loglevel):
     # for l in loggers:
     #     l.setLevel(loglevel)
 
-    SOURCE_TYPES = {}
+    SOURCE_TYPES = _load_source_types()
     AUX_SOURCES = {}
-    for g in glob.glob("sources/*.py"):
-        if g == "sources/__init__.py":
-            continue
-        # module_name = g.replace("/", ".").rpartition(".")[0]
-        # module = importlib.import_module(module_name)
-        # source_class = module.classdef()
-        source_class = importlib.import_module(g.replace("/", ".").rpartition(".")[0]).classdef()
-        source_name = source_class().__class__.__name__
-        SOURCE_TYPES[source_name] = source_class
-        Source.register(source_class)
 
-    pb = PhotoBinner()
+    pb = PhotoBinner(dry_run=dry_run, preserve_folders=preserve_folders)
 
+    # -- load configured source types
     for section_name in [ s for s in config.sections() if s.startswith('Source-') ]:
         source_config = dict(config.items(section_name))
         source_name = section_name.rpartition('-')[-1]
@@ -452,37 +512,39 @@ def main(user_source, target, mask, from_date, dry_run, setup_only, loglevel):
             continue
         if 'exclude_descriptive' in source_config:
             source_config['exclude_descriptive'] = source_config['exclude_descriptive'].split(',')
-        if 'transfer_method' in source_config:
-            source_config['transfer_method'] = pb.move if source_config['transfer_method'] == 'move' else pb.copy
+        # -- transfer method defaults to 'copy' unless stated 'move'
+        source_config['transfer_method'] = pb.move if 'transfer_method' in source_config and source_config['transfer_method'] == 'move' else pb.copy
+        source_config['mask'] = mask
+        source_config['from_date'] = from_date
         AUX_SOURCES[source_name] = SOURCE_TYPES[source_type](**source_config)
 
-    source = None
-
+    # -- select chosen source types
+    sources = []
     if user_source:
         if user_source in AUX_SOURCES.keys():
             print("Attempting source: %s" % user_source)
-            if AUX_SOURCES[user_source].verify(mask=mask, from_date=from_date):
-                source = AUX_SOURCES[user_source]
+            if AUX_SOURCES[user_source].verify():
+                sources.append(AUX_SOURCES[user_source])
         else:
+            # -- if user_source doesn't match a preconfigured source
+            # -- interpret it as a path on-disk
             source_folder = SOURCE_TYPES['Folder'](mountpoint=user_source, transfer_method=pb.move)
             print("Attempting source: %s" % user_source)
-            if source_folder.verify(mask=mask, from_date=from_date):
-                source = source_folder
+            if source_folder.verify():
+                sources.append(source_folder)
     else:
         for s in AUX_SOURCES.keys():
             print("Attempting source: %s" % s)
-            if AUX_SOURCES[s].verify(mask=mask, from_date=from_date):
+            if AUX_SOURCES[s].verify():
                 logger.info("%s verified" % s)
-                source = AUX_SOURCES[s]
-            if source:
-                break
+                sources.append(AUX_SOURCES[s])
 
-    if not source:
+    if len(sources) == 0:
         print("No source provided or found")
         exit(1)
 
     if mask != DEFAULT_MASK:
-        logger.info("Filtering by '%s'" % mask)
+        logger.info("Filtering all sources by '%s'" % mask)
 
     global TARGET
     TARGET = target
@@ -495,17 +557,26 @@ def main(user_source, target, mask, from_date, dry_run, setup_only, loglevel):
     #    self. _log_escrow(logging.DEBUG, "Fixing source.mountpoint with %s.." % os.sep)
     #     source.mountpoint = "%s%s" % (source.mountpoint, os.sep)
 
-    if source.mountpoint and os.path.isfile(source.mountpoint):
-        logger.info("Processing %s " % source.mountpoint)
-        pb.process_file(source=source, dry_run=dry_run)
-    else:
-        logger.info("Processing paths from source..")
-        for current_path in source.paths(mask=mask, from_date=from_date):
-            pb.process_file(current_path=current_path, source=source, dry_run=dry_run)
+    for source in sources:
+        signal.signal(signal.SIGINT, source.sigint_handler())
+        if source.mountpoint and os.path.isfile(source.mountpoint):
+            logger.info("Processing %s " % source.mountpoint)
+            pb.process_file(source=source)
+        else:
+            logger.info("Processing paths from source..")
+            for current_path in source.paths():
+                pb.process_file(source=source, current_path=current_path)
 
-    out_filename = 'out/sorter_%s%s.out' % (datetime.strftime(datetime.now(), "%Y%m%d_%H%M%S"), '_dry_run' if dry_run else '')
+    OUT_FOLDER = 'out'
+
+    if not os.path.exists(OUT_FOLDER):
+        os.makedirs(OUT_FOLDER)
+        os.chown(OUT_FOLDER, OWNER_UID, -1)
+
+    out_filename = '%s/sorter_%s%s.out' % (OUT_FOLDER, datetime.strftime(datetime.now(), "%Y%m%d_%H%M%S"), '_dry_run' if dry_run else '')
     with open(out_filename, 'wb') as f:
         f.write(json.dumps(RUN_STATS, indent=4, sort_keys=True))
+    os.chown(out_filename, OWNER_UID, -1)
     #pprint.pprint(RUN_STATS, indent=4)
 
 if __name__ == "__main__":

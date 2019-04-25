@@ -63,7 +63,23 @@ class BlockDevice(Source):
             logger.info("Creating mount folder..")
             os.makedirs(mountpoint)
 
-    def verify(self, mask="*", from_date=None):
+    # def _sigint_handler(sig, frame, what):
+    #     self._attempt_umount()
+
+    def sigint_handler(self):
+        def sigint_umount(sig, frame):
+            ps_umount = subprocess.Popen(['umount', self.mountpoint])
+            logger.info("Attempting to umount device..")
+            (umountout, umounterr) = ps_umount.communicate(None)
+            if umounterr:
+                logger.error(umounterr)
+                return False
+            if umountout:
+                logger.debug(umountout)
+            return True
+        return sigint_umount
+
+    def verify(self):
         mounted = False
         self.uuid = self._check_attached_device()
         if self.uuid:
@@ -81,12 +97,12 @@ class BlockDevice(Source):
                     os.sleep(3)
         notempty = False
         if mounted:
-            notempty = self._is_not_empty(mask)
+            notempty = self._is_not_empty()
             self._attempt_umount()
         return notempty
 
-    def paths(self, mask="*", from_date=None):
+    def paths(self):
         self._attempt_mount()
-        for p in self._paths(mask):
+        for p in self._paths():
             yield p
         self._attempt_umount()

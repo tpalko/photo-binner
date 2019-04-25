@@ -19,6 +19,8 @@ FIX_EXCLUDES = [
     '/media/storage/pics/inbox/exact_matches'
 ]
 
+DEFAULT_MASK = "*"
+
 class Source():
 
     __metaclass__ = ABCMeta
@@ -27,6 +29,8 @@ class Source():
     exclude_descriptive = None
     transfer_method = None
     filename_mask = "*.mp4"
+    from_date = None
+    mask = DEFAULT_MASK
 
     def __init__(self, *args, **kwargs):
         for k in kwargs:
@@ -34,11 +38,15 @@ class Source():
         self.logger = logging.getLogger(__name__)
 
     @abstractmethod
-    def verify(self, mask="*", from_date=None):
+    def verify(self):
         pass
 
     @abstractmethod
-    def paths(self, mask="*", from_date=None):
+    def paths(self):
+        pass
+
+    @abstractmethod
+    def sigint_handler(self):
         pass
 
     def _filter_media_files(self, filenames):
@@ -50,32 +58,35 @@ class Source():
     def _filter_mask(self, filenames):
         return [ f for f in filenames if f[0:2] != "._" and f[-3:].lower() in ("mov", "avi", "mp4") ]
 
-    def _filter(self, filenames, mask):
-        if mask != "*":
-            self.logger.debug("Applying mask '%s'" % mask)
-            filenames = [ f for f in filenames if re.match(mask, f) ]
-        else:
+    def _filter(self, filenames):
+        if self.mask == DEFAULT_MASK:
             self.logger.debug("Filtering for media files only..")
             return self._filter_media_files(filenames)
+        else:
+            self.logger.debug("Applying mask '%s'" % self.mask)
+            filenames = [ f for f in filenames if re.match(self.mask, f) ]
 
-    def _is_not_empty(self, mask):
+    def _is_not_empty(self):
         self.logger.info("Checking if not empty..")
         notempty = False
-        for (current_folder, dirnames, filenames) in os.walk(self.mountpoint, topdown=True):
-            self.logger.info(" - %s" % current_folder)
-            filenames = self._filter(filenames, mask)
-            if len(filenames) > 0:
-                notempty = True
-                self.logger.info(" - not empty: %s files" % len(filenames))
-                break
+        if os.path.isfile(self.mountpoint) and os.path.exists(self.mountpoint):
+            notempty = True
+        else:
+            for (current_folder, dirnames, filenames) in os.walk(self.mountpoint, topdown=True):
+                self.logger.info(" - %s" % current_folder)
+                filenames = self._filter(filenames)
+                if len(filenames) > 0:
+                    notempty = True
+                    self.logger.info(" - not empty: %s files" % len(filenames))
+                    break
         return notempty
 
-    def _paths(self, mask="*"):
+    def _paths(self):
         self.logger.info("Walking %s.." % self.mountpoint)
         self.logger.info("Excluding folders: %s" % FIX_EXCLUDES)
         for (current_folder, dirnames, filenames) in os.walk(self.mountpoint, topdown=True):
             dirnames[:] = [ d for d in dirnames if os.path.abspath(d) not in FIX_EXCLUDES ]
-            image_files = self._filter(filenames, mask)
+            image_files = self._filter(filenames)
             for filename in image_files:
                 yield os.path.join(current_folder, filename)
 

@@ -38,6 +38,10 @@ class ExifWrapper(object):
         self.tz = timezone(self.timezone)
         self.logger = logging.getLogger(__name__)
         self.logger.debug("OPTIONS -> TIMEZONE: %s" %(self.timezone))
+        # -- prevent exifread from logging at debug
+        exifread_logger = logging.getLogger('exifread')
+        if exifread_logger.getEffectiveLevel() == 10:
+            exifread_logger.setLevel(20)
 
     def _extract_all_metadata(self):
         '''
@@ -64,7 +68,9 @@ class ExifWrapper(object):
             for tag in VALUE_MAP[key]:
                 if tag in TAGS and not value:
                     value = TAGS[tag]
-        return value if value else values
+                    if value:
+                        break
+        return value
 
     def _fix_timezone(self, image_datetime):
         if self.assume_local:
@@ -110,6 +116,8 @@ class ExifWrapper(object):
 
     def exif_key_gen(self):
         path = self.filepath
+        # -- filepath can be a folder, in which case we want to grab just one file within
+        # -- we are assuming the folder only contains image files
         if os.path.isdir(path):
             path = glob("%s/*" % path)[0]
         with open(path) as f:
