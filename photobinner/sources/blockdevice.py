@@ -2,8 +2,7 @@ import os
 import sys
 import subprocess
 import logging
-sys.path.append("..")
-from source import Source
+from photobinner.source import Source
 
 logger = logging.getLogger(__name__)
 
@@ -41,13 +40,16 @@ class BlockDevice(Source):
 
     def _check_attached_device(self):
         uuid = None
-        ps_blkid = subprocess.Popen(['blkid'], stdout=subprocess.PIPE)
-        ps_grepblkid = subprocess.Popen(['grep', self.block_label], stdin=ps_blkid.stdout, stdout=subprocess.PIPE)
-        (blkout, blkerr) = ps_grepblkid.communicate(None)
-        if blkout and len(blkout.strip()) > 0:
-            uuid = blkout.split(' ')[2].split('=')[1].strip('"')
-        else:
-            logger.info("Ain't got no device attached!")
+        try:
+            ps_blkid = subprocess.Popen(['blkid'], stdout=subprocess.PIPE)
+            ps_grepblkid = subprocess.Popen(['grep', self.block_label], stdin=ps_blkid.stdout, stdout=subprocess.PIPE)
+            (blkout, blkerr) = ps_grepblkid.communicate(None)
+            if blkout and len(blkout.strip()) > 0:
+                uuid = blkout.split(' ')[2].split('=')[1].strip('"')
+            else:
+                logger.info("Ain't got no device attached!")
+        except OSError as oe:
+            logger.error("'blkid' failed -- try sudo")
         return uuid
 
     def _check_mountpoint(self, mountpoint):

@@ -2,8 +2,7 @@ import os
 import sys
 import subprocess
 import logging
-sys.path.append("..")
-from source import Source
+from photobinner.source import Source
 
 logger = logging.getLogger(__name__)
 

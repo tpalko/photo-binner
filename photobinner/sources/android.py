@@ -3,8 +3,7 @@ import sys
 import subprocess
 import logging
 from datetime import datetime
-sys.path.append("..")
-from source import Source
+from photobinner.source import Source
 
 ADB_KEY_PATH = '~tpalko/.android/adbkey'
 

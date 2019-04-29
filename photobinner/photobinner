@@ -12,13 +12,13 @@ import re
 from hashbrowns import hash_equal
 import shutil
 import pprint
-from exifwrapper import ExifWrapper
 import json
-from source import Source
 import importlib
 import glob
 from ConfigParser import ConfigParser
-from logescrow import LogEscrow
+from photobinner.source import Source
+from photobinner.exifwrapper import ExifWrapper
+from photobinner.logescrow import LogEscrow
 from pwd import getpwnam
 #from grp import getgrnam
 
@@ -35,7 +35,10 @@ future knowledge.
 '''
 
 config = ConfigParser()
-config.read('./photobinner.cfg')
+config.read('photobinner.cfg')
+user_config = os.path.expanduser('~/.pbrc')
+if os.path.exists(user_config):
+    config.read(os.path.expanduser('~/.pbrc'))
 
 IMAGE_MAKERS = ['Apple']
 
@@ -50,6 +53,8 @@ EPOCH = datetime(1970, 1, 1)
 UTC_EPOCH = UTC.localize(EPOCH)
 LOCAL_EPOCH = UTC_EPOCH.astimezone(TZ)
 DEFAULT_YEARS = [1970, 1980]
+
+OUT_FOLDER = 'out'
 
 OWNER_UID = os.getuid()
 if 'owner' in config.defaults():
@@ -424,37 +429,46 @@ class PhotoBinner(object):
             self.log_escrow.info(" - %s" % move_action)
 
         # - calculate various companion filenames
-        xmp_filename = "%s.xmp" % filename
-        crw_hidden_filename = "._%s" % filename
-        crw_thm_filename = re.sub(r'\.CRW$', ".THM", filename) if filename[-4:] == ".CRW" else None
-        avi_thm_filename = re.sub(r'\.AVI$', ".THM", filename) if filename[-4:] == ".AVI" else None
+        variants = [
+            "%s.xmp" % filename,
+            "._%s" % filename,
+            re.sub(r'\.CRW$', ".THM", filename) if filename[-4:] == ".CRW" else None,
+            re.sub(r'\.AVI$', ".THM", filename) if filename[-4:] == ".AVI" else None
+        ]
 
-        for variant in [xmp_filename, crw_hidden_filename, crw_thm_filename, avi_thm_filename]:
-            if not variant:
+        for variant in [ { 'name': v, 'path': os.path.join(current_folder, v) } for v in variants if v ]:
+            if not os.path.exists(variant.path):
                 continue
-            variant_filepath = os.path.join(current_folder, variant)
-            if not os.path.exists(variant_filepath):
-                continue
-            self.log_escrow.info(" - processing existing variant %s" % variant)
-            #_log_escrow(logging.DEBUG, "    - variant exists: %s" % variant)
-            new_variant_filepath = os.path.join(target_folder, variant)
-            self.log_escrow.info("   - %s -> %s" % (variant_filepath, new_variant_filepath))
+            self.log_escrow.info(" - processing existing variant %s" % variant.name)
+            new_variant_filepath = os.path.join(target_folder, variant.name)
+            self.log_escrow.info("   - %s -> %s" % (variant.path, new_variant_filepath))
             if not self.dry_run and move_necessary:
-                source.transfer_method(variant_filepath, new_variant_filepath)
+                source.transfer_method(variant.path, new_variant_filepath)
 
-def _load_source_types():
-    types = {}
-    for g in glob.glob("sources/*.py"):
-        if g == "sources/__init__.py":
-            continue
-        # module_name = g.replace("/", ".").rpartition(".")[0]
-        # module = importlib.import_module(module_name)
-        # source_class = module.classdef()
-        source_class = importlib.import_module(g.replace("/", ".").rpartition(".")[0]).classdef()
-        source_name = source_class().__class__.__name__
-        types[source_name] = source_class
-        Source.register(source_class)
-    return types
+    source_types = {}
+    def load_source_types(self):
+        self.log_escrow.info("Finding source implementations..")
+        # from sources import android
+        # self.source_types['Android'] = android.classdef()
+        mod = __import__("photobinner.sources")
+        for source in mod.sources.sources():
+            self.log_escrow.info("Loading module: %s" % source)
+            source_class = source.classdef()
+            source_name = source_class().__class__.__name__
+            self.source_types[source_name] = source_class
+            Source.register(source_class)
+
+        # for g in glob.glob("bin/sources/*.py"):
+        #     if g == "bin/sources/__init__.py":
+        #         continue
+        #     # module_name = g.replace("/", ".").rpartition(".")[0]
+        #     # module = importlib.import_module(module_name)
+        #     # source_class = module.classdef()
+        #     module_name = g.replace("/", ".").rpartition(".")[0]
+        #     source_class = importlib.import_module(module_name).classdef()
+        #     source_name = source_class().__class__.__name__
+        #     self.source_types[source_name] = source_class
+        #     Source.register(source_class)
 
 @click.command()
 @click.option('--source', '-s', 'user_source', help='Source folder')
@@ -497,18 +511,18 @@ def main(user_source, target, mask, from_date, preserve_folders, dry_run, setup_
     # for l in loggers:
     #     l.setLevel(loglevel)
 
-    SOURCE_TYPES = _load_source_types()
     AUX_SOURCES = {}
 
     pb = PhotoBinner(dry_run=dry_run, preserve_folders=preserve_folders)
+    pb.load_source_types()
 
     # -- load configured source types
     for section_name in [ s for s in config.sections() if s.startswith('Source-') ]:
         source_config = dict(config.items(section_name))
         source_name = section_name.rpartition('-')[-1]
         source_type = source_config['type']
-        if source_type not in SOURCE_TYPES:
-            logger.warn("Configured source with type '%s' is not represented by a Source implementation")
+        if source_type not in pb.source_types:
+            logger.warn("Configured source with type '%s' is not represented by a Source implementation" % source_type)
             continue
         if 'exclude_descriptive' in source_config:
             source_config['exclude_descriptive'] = source_config['exclude_descriptive'].split(',')
@@ -516,32 +530,42 @@ def main(user_source, target, mask, from_date, preserve_folders, dry_run, setup_
         source_config['transfer_method'] = pb.move if 'transfer_method' in source_config and source_config['transfer_method'] == 'move' else pb.copy
         source_config['mask'] = mask
         source_config['from_date'] = from_date
-        AUX_SOURCES[source_name] = SOURCE_TYPES[source_type](**source_config)
+        AUX_SOURCES[source_name] = pb.source_types[source_type](**source_config)
 
     # -- select chosen source types
-    sources = []
+    attempt_sources = []
     if user_source:
         if user_source in AUX_SOURCES.keys():
-            print("Attempting source: %s" % user_source)
-            if AUX_SOURCES[user_source].verify():
-                sources.append(AUX_SOURCES[user_source])
+            attempt_sources[user_source] = AUX_SOURCES[user_source]
         else:
             # -- if user_source doesn't match a preconfigured source
             # -- interpret it as a path on-disk
-            source_folder = SOURCE_TYPES['Folder'](mountpoint=user_source, transfer_method=pb.move)
-            print("Attempting source: %s" % user_source)
-            if source_folder.verify():
-                sources.append(source_folder)
+            source_folder = pb.source_types['Folder'](mountpoint=user_source, transfer_method=pb.move)
+            attempt_sources[user_source] = source_folder
     else:
         for s in AUX_SOURCES.keys():
-            print("Attempting source: %s" % s)
-            if AUX_SOURCES[s].verify():
-                logger.info("%s verified" % s)
-                sources.append(AUX_SOURCES[s])
+            attempt_sources[s] = AUX_SOURCES[s]
 
-    if len(sources) == 0:
-        print("No source provided or found")
+    logger.info("%s Sources Identified" % len(attempt_sources.keys()))
+
+    verified_sources = []
+    for s in attempt_sources:
+        print("Attempting source: %s" % s)
+        if attempt_sources[s].verify():
+            logger.info(" - verified!")
+            verified_sources.append(s)
+
+    if len(verified_sources) == 0:
+        print("No provided source could be verified")
         exit(1)
+
+    logger.info("%s Sources Verified" % len(verified_sources.keys()))
+
+    print("Continue? y/N")
+    cont = input()
+
+    if cont != 'y':
+        return
 
     if mask != DEFAULT_MASK:
         logger.info("Filtering all sources by '%s'" % mask)
@@ -557,7 +581,7 @@ def main(user_source, target, mask, from_date, preserve_folders, dry_run, setup_
     #    self. _log_escrow(logging.DEBUG, "Fixing source.mountpoint with %s.." % os.sep)
     #     source.mountpoint = "%s%s" % (source.mountpoint, os.sep)
 
-    for source in sources:
+    for source in verified_sources:
         signal.signal(signal.SIGINT, source.sigint_handler())
         if source.mountpoint and os.path.isfile(source.mountpoint):
             logger.info("Processing %s " % source.mountpoint)
@@ -566,8 +590,6 @@ def main(user_source, target, mask, from_date, preserve_folders, dry_run, setup_
             logger.info("Processing paths from source..")
             for current_path in source.paths():
                 pb.process_file(source=source, current_path=current_path)
-
-    OUT_FOLDER = 'out'
 
     if not os.path.exists(OUT_FOLDER):
         os.makedirs(OUT_FOLDER)
