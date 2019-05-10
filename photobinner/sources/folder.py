@@ -12,12 +12,12 @@ def classdef():
 class Folder(Source):
 
     def sigint_handler(self):
-        def handler(sig, frame):
-            pass
-        return handler
+        return self._sigint_handler()
 
     def verify(self):
         return self._is_not_empty()
 
     def paths(self):
-        return self._paths()
+        for filepath in self._paths():
+            # -- convention is to yield the original filepath and the modified/accessible filepath (if modified)
+            yield (filepath, filepath)

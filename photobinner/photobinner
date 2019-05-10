@@ -34,11 +34,16 @@ at the beginning of the loop - it is shown not based on log level but based on
 future knowledge.
 '''
 
+logger = logging.getLogger(__name__)
+
 config = ConfigParser()
-config.read('photobinner.cfg')
+#config.read('photobinner.cfg')
 user_config = os.path.expanduser('~/.pbrc')
 if os.path.exists(user_config):
+    logger.debug("Reading %s" % user_config)
     config.read(os.path.expanduser('~/.pbrc'))
+else:
+    logger.debug("No config, baked-in defaults..")
 
 IMAGE_MAKERS = ['Apple']
 
@@ -66,34 +71,52 @@ if 'owner' in config.defaults():
 #     '/media/storage/pics/inbox'
 # ]
 
-RUN_STATS = {
-    'moves': {},
-    'date_sources': {},
-    'anomalies': {}
-}
-
 class PhotoBinner(object):
 
     dry_run = False
     preserve_folders = 0
+    target_base_folder = ''
+    mask = DEFAULT_MASK
+    from_date = None
+    exact_matches_folder = "./exact_matches"
+    user_source = None
+    sigint = False
+    sessionfile = None
+
+    run_stats = {
+        'meta': {
+            'runs': [],
+            'status': 'open'
+        },
+        'processed_files': {},
+        'moves': {},
+        'date_sources': {},
+        'anomalies': {}
+    }
 
     def __init__(self, *args, **kwargs):
         for k in kwargs:
+            logger.debug("Setting %s -> %s" % (k, kwargs[k]))
             self.__setattr__(k, kwargs[k])
+        for v in [ v for v in dir(self) if v.find("_") != 0 ]:
+            t = type(self.__getattribute__(v))
+            if t in [str, int, bool, unicode] or not t:
+                logger.debug("%s: %s" % (v, self.__getattribute__(v)))
         self.log_escrow = LogEscrow(name=__name__)
+        self._initialize()
 
     def _push_run_stat(self, type, key, value):
-        if key not in RUN_STATS[type]:
-            RUN_STATS[type][key] = []
-        RUN_STATS[type][key].append(value)
+        if key not in self.run_stats[type]:
+            self.run_stats[type][key] = []
+        self.run_stats[type][key].append(value)
 
     def _increment_run_stat(self, cat, current_folder, target_folder):
-        if current_folder not in RUN_STATS['moves']:
-            RUN_STATS['moves'][current_folder] = {}
-        if target_folder not in RUN_STATS['moves'][current_folder]:
-            RUN_STATS['moves'][current_folder][target_folder] = 0
-        RUN_STATS['moves'][current_folder][target_folder] += 1
-        # base = RUN_STATS[cat]
+        if current_folder not in self.run_stats['moves']:
+            self.run_stats['moves'][current_folder] = {}
+        if target_folder not in self.run_stats['moves'][current_folder]:
+            self.run_stats['moves'][current_folder][target_folder] = 0
+        self.run_stats['moves'][current_folder][target_folder] += 1
+        # base = self.run_stats[cat]
         # for k in kwargs:
         #     if kwargs[k] not in base:
         #         base[kwargs[k]] = {}
@@ -199,7 +222,7 @@ class PhotoBinner(object):
             elif filename_timestamp.find('-') > 0:
                 filename_date = TZ.localize(datetime.strptime(filename_timestamp, "%Y%m%d-%H%M%S"))
             else:
-                logger.warn("- timestamp %s extracted from filename but datetime format not expected" % filename_timestamp)
+                self.log_escrow.warn("- timestamp %s extracted from filename but datetime format not expected" % filename_timestamp)
             #calculated_timestamp = datetime.strftime(filename_date, "%Y-%m-%d %H:%M:%S")
             #calculated_date = datetime.strftime(filename_date, "%Y-%m-%d")
         else:
@@ -341,8 +364,8 @@ class PhotoBinner(object):
             if hash_equal(current_path, new_path):
                 move_necessary = COPY_EXACT_MATCHES
                 if move_necessary:
-                    self.log_escrow.warn(" - file at destination path is exact, moving to %s" % EXACT_MATCHES_FOLDER)
-                    target_folder = EXACT_MATCHES_FOLDER
+                    self.log_escrow.warn(" - file at destination path is exact, moving to %s" % self.exact_matches_folder)
+                    target_folder = self.exact_matches_folder
                     new_path = os.path.join(target_folder, filename)
                     move_action = "exact match at target, moving to %s" % target_folder
                 else:
@@ -371,7 +394,7 @@ class PhotoBinner(object):
 
         return (target_folder, move_necessary, move_action,)
 
-    def process_file(self, source, current_path=None):
+    def _process_file(self, source, current_path=None):
 
         if not current_path:
             current_path = source.mountpoint
@@ -392,7 +415,7 @@ class PhotoBinner(object):
 
         if not target_date:
             self.log_escrow.warn(" - no target date could be calculated")
-            return
+            raise Exception("no target date could be calculated")
 
         descriptive = self._extract_descriptive(current_path, source.mountpoint, source.exclude_descriptive)
 
@@ -405,7 +428,7 @@ class PhotoBinner(object):
         descriptive_date = "%s_%s" %(date_string, descriptive) if descriptive else date_string
 
         # -- working values
-        target_folder = os.path.join(TARGET, year_string, descriptive_date)
+        target_folder = os.path.join(self.target_base_folder, year_string, descriptive_date)
         (target_folder, move_necessary, move_action,) = self._determine_move_action(current_path, target_folder, filename)
         new_path = os.path.join(target_folder, filename)
 
@@ -437,16 +460,78 @@ class PhotoBinner(object):
         ]
 
         for variant in [ { 'name': v, 'path': os.path.join(current_folder, v) } for v in variants if v ]:
-            if not os.path.exists(variant.path):
+            if not os.path.exists(variant['path']):
                 continue
-            self.log_escrow.info(" - processing existing variant %s" % variant.name)
-            new_variant_filepath = os.path.join(target_folder, variant.name)
-            self.log_escrow.info("   - %s -> %s" % (variant.path, new_variant_filepath))
+            self.log_escrow.info(" - processing existing variant %s" % variant['name'])
+            new_variant_filepath = os.path.join(target_folder, variant['name'])
+            self.log_escrow.info("   - %s -> %s" % (variant['path'], new_variant_filepath))
             if not self.dry_run and move_necessary:
-                source.transfer_method(variant.path, new_variant_filepath)
+                source.transfer_method(variant['path'], new_variant_filepath)
+
+    '''
+    Initialization Block
+    '''
 
     source_types = {}
-    def load_source_types(self):
+    verified_sources = {}
+    attempt_sources = {}
+    aux_sources = {}
+
+    def _verify_chosen_sources(self):
+        for s in self.attempt_sources:
+            self.log_escrow.info("Verifying source: %s" % s)
+            if self.attempt_sources[s].verify():
+                self.log_escrow.info(" - verified!")
+                self.verified_sources[s] = self.attempt_sources[s]
+            else:
+                self.log_escrow.info(" - not verified!")
+
+        self.log_escrow.info("%s/%s sources verified: [%s]" % (len(self.verified_sources.keys()), len(self.attempt_sources.keys()), ",".join([ s for s in self.verified_sources.keys() ])))
+
+    def _identify_chosen_sources(self):
+        # -- select chosen source types
+        if self.user_source:
+            if self.user_source in self.aux_sources.keys():
+                self.attempt_sources[self.user_source] = self.aux_sources[self.user_source]
+            else:
+                # -- if self.user_source doesn't match a preconfigured source
+                # -- interpret it as a path on-disk
+                mountpoint = os.path.abspath(self.user_source)
+                source_folder = self.source_types['Folder'](type='Folder', mountpoint=mountpoint, transfer_method=self.move)
+                self.attempt_sources[mountpoint] = source_folder
+        else:
+            for s in self.aux_sources.keys():
+                self.attempt_sources[s] = self.aux_sources[s]
+
+        self.log_escrow.info("%s/%s sources selected: [%s]" % (len(self.attempt_sources.keys()), len(self.aux_sources.keys()), ",".join([ "%s (%s)" % (s, self.attempt_sources[s].type) for s in self.attempt_sources.keys() ])))
+
+    def _load_configured_sources(self):
+
+        self.log_escrow.info("Finding sources..")
+
+        if self.mask != DEFAULT_MASK:
+            self.log_escrow.info("Filtering all sources by '%s'" % self.mask)
+
+        # -- load configured source types
+        for section_name in [ s for s in config.sections() if s.startswith('Source-') ]:
+            source_config = dict(config.items(section_name))
+            source_name = section_name.rpartition('-')[-1]
+            source_type = source_config['type']
+            if source_type not in self.source_types:
+                self.log_escrow.warn("Configured source with type '%s' is not represented by a Source implementation" % source_type)
+                continue
+            if 'exclude_descriptive' in source_config:
+                source_config['exclude_descriptive'] = source_config['exclude_descriptive'].split(',')
+            # -- transfer method defaults to 'copy' unless stated 'move'
+            source_config['transfer_method'] = self.move if 'transfer_method' in source_config and source_config['transfer_method'] == 'move' else self.copy
+            source_config['mask'] = self.mask
+            source_config['from_date'] = self.from_date
+            source_config['name'] = source_name
+            self.aux_sources[source_name] = self.source_types[source_type](**source_config)
+
+        self.log_escrow.info("%s source configurations found: [%s]" % (len(self.aux_sources.keys()), ",".join([ s for s in self.aux_sources.keys() ])))
+
+    def _load_source_types(self):
         self.log_escrow.info("Finding source implementations..")
         # from sources import android
         # self.source_types['Android'] = android.classdef()
@@ -457,6 +542,71 @@ class PhotoBinner(object):
             source_name = source_class().__class__.__name__
             self.source_types[source_name] = source_class
             Source.register(source_class)
+        self.log_escrow.info("%s source types configured: [%s]" % (len(self.source_types.keys()), ",".join([ s for s in self.source_types.keys() ])))
+
+    def _get_json_content(self, filepath):
+        j = None
+        with open(filepath, 'r') as o:
+            filepath_contents = o.read()
+            try:
+                j = json.loads(filepath_contents)
+            except:
+                pass
+        return j
+
+    def _load_session(self):
+        open_sessions = []
+
+        # -- gather up all the open sessions
+        for outfile in glob.glob(os.path.join(OUT_FOLDER, "photobinner_*%s.out" % ('_dry_run' if self.dry_run else ''))):
+            j = self._get_json_content(outfile)
+            if j and 'meta' in j and 'status' in j['meta'] and j['meta']['status'] == 'open':
+                open_sessions.append(outfile)
+
+        # -- TODO: menu to choose a session
+        if len(open_sessions) > 1:
+            logger.warn("More than one open session was found: %s" % ",".join(open_sessions))
+            exit(1)
+
+        # -- if for some reason sessionfile has been set, we want None unless it finds or creates this time?
+        self.sessionfile = None
+        if len(open_sessions) == 0:
+            timestamp = datetime.strftime(datetime.now(), "%Y%m%d_%H%M%S")
+            outfile_name = "photobinner_%s%s.out" % (timestamp, ('_dry_run' if self.dry_run else ''))
+            self.sessionfile = os.path.join(OUT_FOLDER, outfile_name)
+            self.log_escrow.warn("Starting a new session file: %s" % self.sessionfile)
+            with open(self.sessionfile, 'w') as s:
+                s.write(json.dumps(self.run_stats))
+        elif len(open_sessions) == 1:
+            self.sessionfile = open_sessions[0]
+            self.log_escrow.warn("Continuing a session: %s" % self.sessionfile)
+            self.run_stats = self._get_json_content(self.sessionfile)
+
+    def _initialize(self):
+
+        signal.signal(signal.SIGINT, self.sigint_handler())
+
+        self._load_source_types()
+        self._load_configured_sources()
+        self._identify_chosen_sources()
+        self._verify_chosen_sources()
+
+        if not os.path.exists(OUT_FOLDER):
+            os.makedirs(OUT_FOLDER)
+            os.chown(OUT_FOLDER, OWNER_UID, -1)
+
+        self._load_session()
+
+        # -- populated verified sources with processed files from previous runs
+        for v in [ v for v in self.verified_sources if v in self.run_stats['processed_files'] ]:
+            self.verified_sources[v].processed_files = self.run_stats['processed_files'][v]
+            logger.debug("Source: %s -> Found %s processed files" % (v, len(self.verified_sources[v].processed_files)))
+
+        if len(self.verified_sources.keys()) == 0:
+            logger.debug("No provided source could be verified")
+            exit(1)
+
+        #self.log_escrow.info("%s Sources Verified" % len(self.verified_sources.keys()))
 
         # for g in glob.glob("bin/sources/*.py"):
         #     if g == "bin/sources/__init__.py":
@@ -470,6 +620,81 @@ class PhotoBinner(object):
         #     self.source_types[source_name] = source_class
         #     Source.register(source_class)
 
+    '''
+    End Initialization Block
+    '''
+
+    def sigint_handler(self, source_handler=None):
+        def handler(sig, frame):
+            self.sigint = True
+            if source_handler:
+                source_handler(sig, frame)
+        return handler
+
+    def run(self):
+
+        if not os.path.exists(self.exact_matches_folder):
+            os.makedirs(self.exact_matches_folder)
+
+        for s in self.verified_sources.keys():
+            source = self.verified_sources[s]
+            signal.signal(signal.SIGINT, self.sigint_handler(source.sigint_handler()))
+            if self.sigint:
+                self.log_escrow.fatal("Noticed sigint in main loop, breaking..")
+                break
+            run_stat = { 'source': s, 'start': datetime.strftime(datetime.now(), "%Y-%m-%dT%H:%M:%S"), 'file_count': 0 }
+            try:
+                if source.mountpoint and os.path.isfile(source.mountpoint):
+                    self.log_escrow.info("Processing %s " % source.mountpoint)
+                    try:
+                        self._process_file(source=source)
+                        run_stat['file_count'] += 1
+                        source.processed_files.append(source.mountpoint)
+                    except:
+                        self.log_escrow.error("Exception caught processing file: %s" % source.mountpoint)
+                        self.log_escrow.error(str(sys.exc_info()[0]))
+                        self.log_escrow.error(str(sys.exc_info()[1]))
+                        traceback.print_tb(sys.exc_info()[2])
+                else:
+                    self.log_escrow.info("Processing paths from source..")
+                    for (original_path, current_path) in source.paths():
+                        if self.sigint:
+                            break
+                        try:
+                            self._process_file(source=source, current_path=current_path)
+                            run_stat['file_count'] += 1
+                            source.processed_files.append(original_path)
+                        except:
+                            self.log_escrow.error("Exception caught processing file: %s (%s)" % (current_path, original_path))
+                            self.log_escrow.error(str(sys.exc_info()[0]))
+                            self.log_escrow.error(str(sys.exc_info()[1]))
+                            traceback.print_tb(sys.exc_info()[2])
+            except:
+                run_stat['exception'] = str(sys.exc_info()[1])
+
+            self.log_escrow.info("Closing the run..")
+            run_stat['stop'] = datetime.strftime(datetime.now(), "%Y-%m-%dT%H:%M:%S")
+            self.run_stats['meta']['runs'].append(run_stat)
+
+        self.log_escrow.info("Capturing processed files from sources..")
+        for s in self.verified_sources.keys():
+            self.run_stats['processed_files'][s] = self.verified_sources[s].processed_files
+
+        # -- thinking one file should be kept in perpetuity..
+        #if not self.sigint and not 'exception' in run_stat:
+        #    self.run_stats['meta']['status'] = 'closed'
+
+        self.log_escrow.info("Processing session and writing to disk..")
+        updated_session = json.dumps(self.run_stats, indent=4, sort_keys=True)
+
+        with open(self.sessionfile, 'wb') as f:
+            f.write(updated_session)
+
+        os.chown(self.sessionfile, OWNER_UID, -1)
+        #pprint.pprint(self.run_stats, indent=4)
+
+        self.log_escrow.info("All operations complete.")
+
 @click.command()
 @click.option('--source', '-s', 'user_source', help='Source folder')
 @click.option('--target', '-t', 'target', default=DEFAULT_TARGET, help='Target folder, default "%s"' % DEFAULT_TARGET)
@@ -481,125 +706,39 @@ class PhotoBinner(object):
 @click.option('--loglevel', '-l', 'loglevel', default='info', help='Logging level (debug, info, warn, error, fatal)')
 def main(user_source, target, mask, from_date, preserve_folders, dry_run, setup_only, loglevel):
 
-    '''
-    use cases:
-        - import images from mounted SD card/USB stick/mobile device
-            $ ./pic_date_sorter.py -i
-        - sort images in place
-        - sort images from one location to another
-    these can be combined into a single operation: grab files from somewhere and sort them either in-place or to another location
-        source defaults to searching for a mounted device but can be overwritten
-        target defaults to DEFAULT_TARGET but can be overwritten
-    'sort' means organizing into year/date tree, and this implies "fixing" an existing, possibly incorrect, year/date tree
-    '''
-
-    logger = logging.getLogger(__name__)
-    sourcelogger = logging.getLogger('source')
-    exifwrapperlogger = logging.getLogger('exifwrapper')
-
-    loggers = [
-        logger,
-        sourcelogger,
-        exifwrapperlogger
-    ]
+    # use cases:
+    #     - import images from mounted SD card/USB stick/mobile device
+    #         $ ./pic_date_sorter.py -i
+    #     - sort images in place
+    #     - sort images from one location to another
+    # these can be combined into a single operation: grab files from somewhere and sort them either in-place or to another location
+    #     source defaults to searching for a mounted device but can be overwritten
+    #     target defaults to DEFAULT_TARGET but can be overwritten
+    # 'sort' means organizing into year/date tree, and this implies "fixing" an existing, possibly incorrect, year/date tree
 
     loglevel = int(logging._levelNames[loglevel.upper()])
-
-    # - at the top?
     logging.basicConfig(level=loglevel)
-    # - or each ?
-    # for l in loggers:
-    #     l.setLevel(loglevel)
 
-    AUX_SOURCES = {}
+    cfg = {
+        'dry_run': dry_run,
+        'preserve_folders': preserve_folders,
+        'target_base_folder': target,
+        'mask': mask,
+        'from_date': from_date,
+        'exact_matches_folder': EXACT_MATCHES_FOLDER,
+        'user_source': user_source
+    }
 
-    pb = PhotoBinner(dry_run=dry_run, preserve_folders=preserve_folders)
-    pb.load_source_types()
+    pb = PhotoBinner(**cfg)
 
-    # -- load configured source types
-    for section_name in [ s for s in config.sections() if s.startswith('Source-') ]:
-        source_config = dict(config.items(section_name))
-        source_name = section_name.rpartition('-')[-1]
-        source_type = source_config['type']
-        if source_type not in pb.source_types:
-            logger.warn("Configured source with type '%s' is not represented by a Source implementation" % source_type)
-            continue
-        if 'exclude_descriptive' in source_config:
-            source_config['exclude_descriptive'] = source_config['exclude_descriptive'].split(',')
-        # -- transfer method defaults to 'copy' unless stated 'move'
-        source_config['transfer_method'] = pb.move if 'transfer_method' in source_config and source_config['transfer_method'] == 'move' else pb.copy
-        source_config['mask'] = mask
-        source_config['from_date'] = from_date
-        AUX_SOURCES[source_name] = pb.source_types[source_type](**source_config)
+    if not setup_only:
+        logger.fatal("Continue? y/N")
+        cont = raw_input()
 
-    # -- select chosen source types
-    attempt_sources = []
-    if user_source:
-        if user_source in AUX_SOURCES.keys():
-            attempt_sources[user_source] = AUX_SOURCES[user_source]
-        else:
-            # -- if user_source doesn't match a preconfigured source
-            # -- interpret it as a path on-disk
-            source_folder = pb.source_types['Folder'](mountpoint=user_source, transfer_method=pb.move)
-            attempt_sources[user_source] = source_folder
-    else:
-        for s in AUX_SOURCES.keys():
-            attempt_sources[s] = AUX_SOURCES[s]
+        if str(cont) != 'y':
+            exit(0)
 
-    logger.info("%s Sources Identified" % len(attempt_sources.keys()))
-
-    verified_sources = []
-    for s in attempt_sources:
-        print("Attempting source: %s" % s)
-        if attempt_sources[s].verify():
-            logger.info(" - verified!")
-            verified_sources.append(s)
-
-    if len(verified_sources) == 0:
-        print("No provided source could be verified")
-        exit(1)
-
-    logger.info("%s Sources Verified" % len(verified_sources.keys()))
-
-    print("Continue? y/N")
-    cont = input()
-
-    if cont != 'y':
-        return
-
-    if mask != DEFAULT_MASK:
-        logger.info("Filtering all sources by '%s'" % mask)
-
-    global TARGET
-    TARGET = target
-
-    if not os.path.exists(EXACT_MATCHES_FOLDER):
-        os.makedirs(EXACT_MATCHES_FOLDER)
-
-    # - if no ending slash on source, append one
-    # if not os.path.isfile(source.mountpoint) and source.mountpoint[-1] != os.sep:
-    #    self. _log_escrow(logging.DEBUG, "Fixing source.mountpoint with %s.." % os.sep)
-    #     source.mountpoint = "%s%s" % (source.mountpoint, os.sep)
-
-    for source in verified_sources:
-        signal.signal(signal.SIGINT, source.sigint_handler())
-        if source.mountpoint and os.path.isfile(source.mountpoint):
-            logger.info("Processing %s " % source.mountpoint)
-            pb.process_file(source=source)
-        else:
-            logger.info("Processing paths from source..")
-            for current_path in source.paths():
-                pb.process_file(source=source, current_path=current_path)
-
-    if not os.path.exists(OUT_FOLDER):
-        os.makedirs(OUT_FOLDER)
-        os.chown(OUT_FOLDER, OWNER_UID, -1)
-
-    out_filename = '%s/sorter_%s%s.out' % (OUT_FOLDER, datetime.strftime(datetime.now(), "%Y%m%d_%H%M%S"), '_dry_run' if dry_run else '')
-    with open(out_filename, 'wb') as f:
-        f.write(json.dumps(RUN_STATS, indent=4, sort_keys=True))
-    os.chown(out_filename, OWNER_UID, -1)
-    #pprint.pprint(RUN_STATS, indent=4)
+        pb.run()
 
 if __name__ == "__main__":
     main()

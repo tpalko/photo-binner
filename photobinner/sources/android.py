@@ -9,13 +9,14 @@ ADB_KEY_PATH = '~tpalko/.android/adbkey'
 
 ANDROID_PATHS = [
     "/mnt/sdcard/DCIM/baconreader",
-    "/mnt/sdcard/DCIM/Camera",
-    "/mnt/sdcard/Download",
+    "/mnt/sdcard/DCIM/Camera", # jpg
+    "/mnt/sdcard/DCIM/Google Photos", #jpg
+    "/mnt/sdcard/Download", # any
     "/mnt/sdcard/panoramas",
-    "/mnt/sdcard/Pictures/baconreader",
-    "/mnt/sdcard/Pictures/Image Editor",
-    "/mnt/sdcard/Pictures/Image Editor/Downloads",
-    "/mnt/sdcard/Pictures/Screenshots",
+    "/mnt/sdcard/Pictures/baconreader", # jpg (any?)
+    "/mnt/sdcard/Pictures/Image Editor", # png
+    "/mnt/sdcard/Pictures/Image Editor/Downloads", # jpg (any?)
+    "/mnt/sdcard/Pictures/Screenshots", # png
 ]
 
 logger = logging.getLogger(__name__)
@@ -28,9 +29,7 @@ class Android(Source):
     device = None
 
     def sigint_handler(self):
-        def handler(sig, frame):
-            pass
-        return handler
+        return self._sigint_handler()
 
     def verify(self):
         import os.path as op
@@ -43,12 +42,14 @@ class Android(Source):
         # Connect to the device
         self.device = adb_commands.AdbCommands()
         try:
-            adb_kill_server = subprocess.Popen(['adb', 'kill-server'])
+            kill_server_cmd = ['adb', 'kill-server']
+            adb_kill_server = subprocess.Popen(kill_server_cmd)
+            logger.info(" -> %s" % kill_server_cmd)
             (kill_server_out, kill_server_err,) = adb_kill_server.communicate(None)
             if kill_server_out:
                 logger.info(kill_server_out)
             if kill_server_err:
-                logger.info(kill_server_err)
+                logger.error(kill_server_err)
             logger.info("Attempting device connection..")
             self.device.ConnectDevice(rsa_keys=[signer])
             logger.info("Examining filepaths..")
@@ -76,9 +77,15 @@ class Android(Source):
         for path in self.files:
             for filepath in self.files[path]:
                 logger.debug(" - have file %s" % filepath)
+                if self._is_processed(filepath):
+                    logger.warn("%s found as processed, skipping.." % filepath)
+                    continue
                 filename = filepath.rpartition('/')[-1]
                 if filename.strip() == '':
                     continue
+                size_bytes = int(self.device.Shell("stat \"%s\" | grep Size | cut -d \" \" -f 4" % filepath))
+                mb_contents = size_bytes*1.0/(1024*1024)
+                logger.debug(" - have %.2f MB contents" % mb_contents)
                 targetfilepath = os.path.join('/tmp', filename)
                 # ps = subprocess.Popen(['touch', targetfilepath])
                 # (touchout, toucherr,) = ps.communicate(None)
@@ -89,10 +96,9 @@ class Android(Source):
                 logger.debug(" - attempting to open for writing %s" % targetfilepath)
                 with open(targetfilepath, 'wb') as targetfile:
                     logger.debug(" - attempting to pull %s -> %s" % (filepath, targetfilepath))
-                    filecontents = self.device.Pull(filepath) #, dest_file=targetfile) #dest_file=f)
-                    len_contents = len(filecontents)
-                    mb_contents = len_contents*1.0/(1024*1024)
-                    logger.debug(" - have %.2f MB contents" % mb_contents)
-                    targetfile.write(filecontents)
-                yield targetfilepath
-                #os.remove(targetfilepath)
+                    targetfile.write(self.device.Pull(filepath))
+                # -- convention is to yield the original filepath and the modified/accessible filepath (if modified)
+                yield (filepath, targetfilepath)
+                logger.warn("Deleting %s.." % targetfilepath)
+                if os.path.exists(targetfilepath):
+                    os.remove(targetfilepath)

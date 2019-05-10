@@ -69,17 +69,7 @@ class BlockDevice(Source):
     #     self._attempt_umount()
 
     def sigint_handler(self):
-        def sigint_umount(sig, frame):
-            ps_umount = subprocess.Popen(['umount', self.mountpoint])
-            logger.info("Attempting to umount device..")
-            (umountout, umounterr) = ps_umount.communicate(None)
-            if umounterr:
-                logger.error(umounterr)
-                return False
-            if umountout:
-                logger.debug(umountout)
-            return True
-        return sigint_umount
+        return self._sigint_handler(callback=self._attempt_umount)
 
     def verify(self):
         mounted = False
@@ -105,6 +95,7 @@ class BlockDevice(Source):
 
     def paths(self):
         self._attempt_mount()
-        for p in self._paths():
-            yield p
+        for filepath in self._paths():
+            # -- convention is to yield the original filepath and the modified/accessible filepath (if modified)
+            yield (filepath, filepath)
         self._attempt_umount()
