@@ -4,20 +4,7 @@ import subprocess
 import logging
 from datetime import datetime
 from photobinner.source import Source
-
-ADB_KEY_PATH = '~tpalko/.android/adbkey'
-
-ANDROID_PATHS = [
-    "/mnt/sdcard/DCIM/baconreader",
-    "/mnt/sdcard/DCIM/Camera", # jpg
-    "/mnt/sdcard/DCIM/Google Photos", #jpg
-    "/mnt/sdcard/Download", # any
-    "/mnt/sdcard/panoramas",
-    "/mnt/sdcard/Pictures/baconreader", # jpg (any?)
-    "/mnt/sdcard/Pictures/Image Editor", # png
-    "/mnt/sdcard/Pictures/Image Editor/Downloads", # jpg (any?)
-    "/mnt/sdcard/Pictures/Screenshots", # png
-]
+import traceback
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +14,8 @@ def classdef():
 class Android(Source):
 
     device = None
+    paths = []
+    adb_key_path = None
 
     def sigint_handler(self):
         return self._sigint_handler()
@@ -38,13 +27,13 @@ class Android(Source):
         from adb import sign_m2crypto
 
         # KitKat+ devices require authentication
-        signer = sign_m2crypto.M2CryptoSigner(op.expanduser(ADB_KEY_PATH))
+        signer = sign_m2crypto.M2CryptoSigner(op.expanduser(self.adb_key_path))
         # Connect to the device
         self.device = adb_commands.AdbCommands()
         try:
             kill_server_cmd = ['adb', 'kill-server']
             adb_kill_server = subprocess.Popen(kill_server_cmd)
-            logger.info(" -> %s" % kill_server_cmd)
+            logger.debug(" -> %s" % kill_server_cmd)
             (kill_server_out, kill_server_err,) = adb_kill_server.communicate(None)
             if kill_server_out:
                 logger.info(kill_server_out)
@@ -59,18 +48,20 @@ class Android(Source):
             if self.from_date:
                 delta = datetime.now() - self.from_date
                 ctime_filter = ' -ctime -%s' % delta.days
-            for path in ANDROID_PATHS:
+            for path in self.paths:
                 #  -name \"%s\"
                 cmd_find = 'find \"%s\" -type f%s' % (path, ctime_filter)
-                logger.info("Getting contents of %s: \"%s\"" % (path, cmd_find))
                 raw_files = self.device.Shell(cmd_find)
                 filtered_files = self._filter(raw_files.split('\n'))
+                logger.info("Contents of %s: \"%s\"" % (path, len(filtered_files)))
                 if len(filtered_files) > 0:
                     self.files[path] = filtered_files
                     any_files = True
             return any_files
         except:
-            logger.error(sys.exc_info())
+            logger.error(str(sys.exc_info()[0]))
+            logger.error(str(sys.exc_info()[1]))
+            traceback.print_tb(sys.exc_info()[2])
         return False
 
     def paths(self):

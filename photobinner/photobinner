@@ -45,6 +45,7 @@ if os.path.exists(user_config):
 else:
     logger.debug("No config, baked-in defaults..")
 
+# -- EXIF 'image_make' in this list get descriptive text <make>_<model>
 IMAGE_MAKERS = ['Apple']
 
 DEFAULT_TARGET = config.defaults()['target']
@@ -151,24 +152,31 @@ class PhotoBinner(object):
     '''
 
     def _extract_descriptive(self, full_path, mountpoint, exclude_descriptive):
+        descriptive = None
         ew = ExifWrapper(filepath=full_path)
         all_metadata = ew.all_values()
         if 'image_make' in all_metadata and 'image_model' in all_metadata and all_metadata['image_make'] in IMAGE_MAKERS:
             # -- Apple
             # -- iPhone 5
-            make_and_model = "%s_%s" % (all_metadata['image_make'], all_metadata['image_model'])
-        else:
-            # -- /original/path/given/to/file.jpg <= full_path
-            # -- /original/path/given/to <= mountpoint
-            left_trim = mountpoint
-            # -- preserve_folders = 2 => /original/path/given
+            descriptive = "%s_%s" % (all_metadata['image_make'], all_metadata['image_model'])
+        elif mountpoint:
+            # -- use preserve_folders count to save that number of parent folders in the source's base path
+            # -- the file may be nested deep, and we're by default going to use all folder names between it and the base path for descriptive text search
+            # -- but by default, the base path gets chucked
+            # -- preserve_folders saves that number of parent folders from the base path
+            # --
+            # -- /original/path/given/some/interesting/detail/of/file.jpg <= full_path
+            # -- /original/path/given/ <= mountpoint
+            # -- preserve_folders = 0 ->            some/interesting/detail/of/file.jpg
+            # -- preserve_folders = 2 -> path/given/some/interesting/detail/of/file.jpg
+
+            path_to_chuck = mountpoint.rstrip('/')
             for i in range(self.preserve_folders):
-                left_trim = left_trim.rpartition('/')[0]
-            # -- to/file.jpg
-            base_removed = full_path.replace(left_trim, '') if left_trim else full_path
-            # -- [ 'to', '/', 'file.jpg']
+                path_to_chuck = path_to_chuck.rpartition('/')[0]
+            base_removed = full_path.replace(path_to_chuck, '') if path_to_chuck else full_path
             descriptive_path = base_removed.rpartition('/')[0]
             self.log_escrow.debug(" - descriptive path: %s" % descriptive_path)
+
             # -- remove leading /dupe/nnn
             if re.search('\/?dupe\/[0-9]+', descriptive_path):
                 descriptive_path = re.sub("\/?dupe\/[0-9]+", "", descriptive_path)
@@ -396,6 +404,7 @@ class PhotoBinner(object):
 
     def _process_file(self, source, current_path=None):
 
+        # -- Android sources don't have a 'mountpoint', nor would current_path ever be None
         if not current_path:
             current_path = source.mountpoint
 
@@ -565,12 +574,16 @@ class PhotoBinner(object):
 
         # -- TODO: menu to choose a session
         if len(open_sessions) > 1:
-            logger.warn("More than one open session was found: %s" % ",".join(open_sessions))
-            exit(1)
-
-        # -- if for some reason sessionfile has been set, we want None unless it finds or creates this time?
-        self.sessionfile = None
-        if len(open_sessions) == 0:
+            logger.warn("More than one open session was found. Please choose one:")
+            session_choice = None
+            while(not session_choice or int(session_choice)-1 not in range(len(open_sessions))):
+                for s in range(len(open_sessions)):
+                    print("(%s) %s" % ((s+1), open_sessions[s]))
+                session_choice = raw_input()
+            self.sessionfile = open_sessions[int(session_choice)-1]
+            self.log_escrow.warn("Continuing session file: %s" % self.sessionfile)
+            self.run_stats = self._get_json_content(self.sessionfile)
+        elif len(open_sessions) == 0:
             timestamp = datetime.strftime(datetime.now(), "%Y%m%d_%H%M%S")
             outfile_name = "photobinner_%s%s.out" % (timestamp, ('_dry_run' if self.dry_run else ''))
             self.sessionfile = os.path.join(OUT_FOLDER, outfile_name)

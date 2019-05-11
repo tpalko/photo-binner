@@ -1,0 +1,28 @@
+[DEFAULT]
+target = /where/i/want/my/pictures
+owner = exampleuser
+
+[folders]
+exact_matches = /where/i/want/exact/duplicates
+copy_exact_matches = False
+
+[locale]
+timezone = US/Eastern
+
+[Source-MyPhone]
+type = Android
+exclude_descriptive = tmp
+transfer_method = move
+adb_key_path = /probably/home/username/.android/adbkey
+paths = "/various/paths","/on/device"
+
+[Source-ExampleMySDCard]
+type = BlockDevice
+block_label = Example-EOS_DIGITAL
+mountpoint = /media/user/mountpoint/for/usb/devices
+exclude_descriptive = Example,DCIM,[0-9]*CANON
+
+[Source-ExampleFolder]
+type = Folder
+mountpoint = /any/path/to/image/files
+transfer_method = copy

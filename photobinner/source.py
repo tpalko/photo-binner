@@ -36,7 +36,10 @@ class Source():
 
     def __init__(self, *args, **kwargs):
         for k in kwargs:
-            self.__setattr__(k, kwargs[k])
+            val = kwargs[k]
+            if type(kwargs[k]) == str and kwargs[k].count(",") > 0:
+                val = kwargs[k].split(',')
+            self.__setattr__(k, val)
         self.logger = logging.getLogger(__name__)
 
     @abstractmethod
