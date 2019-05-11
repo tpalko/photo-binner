@@ -1,16 +1,16 @@
 # photobinner
 
-Sorts image files into a two-level folder structure:  YYYY/YYYY-MM-DD/*.
+Sorts image files into a two-level folder structure:  YYYY/YYYY-MM-DD/.
 
 This program does basically one thing, additionally:
 
-* verifies the target date folder with EXIF metadata, the file's modification time, and a possible timestamp in the filename (IMG_20190118_120533.JPG)
+* verifies the target date folder with EXIF metadata, the file's modification time, and a possible timestamp in the filename (e.g. IMG_20190118_120533.JPG)
 * extracts descriptive text from the original folder structure to include in the final destination folder name
 * tracks history to avoid re-copying the same file in future runs
 * collects statistics (anomalies/inconsistencies found, source/destination bin counts)
 * compares the MD5 hash of supposed duplicates to prevent loss of misnamed files
 * works with multiple sources at once to converge at a single destination
-* comes with source type implementations supporting Android (adb), BlockDevice, and Folder
+* comes with source type implementations supporting Android (adb), block devices, and general folders
 * has a pluggable architecture for source types, so you can write your own!
 * has a versatile configuration file for easy control over its behavior
 
@@ -97,3 +97,5 @@ Possibly worth noting ..
 - flesh out global options vs. per-source
 - report each change made / reverse processing
 - allow configurable arbitrary path to plugin sources
+- broader deduplication
+- other fun things to do with image files while we're in there anyway   
