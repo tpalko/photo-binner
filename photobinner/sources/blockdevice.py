@@ -2,7 +2,7 @@ import os
 import sys
 import subprocess
 import logging
-from photobinner.source import Source
+from photobinner.source import Source, SourceFile
 
 logger = logging.getLogger(__name__)
 
@@ -97,5 +97,5 @@ class BlockDevice(Source):
         self._attempt_mount()
         for filepath in self._paths():
             # -- convention is to yield the original filepath and the modified/accessible filepath (if modified)
-            yield (filepath, filepath)
+            yield SourceFile(filepath)
         self._attempt_umount()

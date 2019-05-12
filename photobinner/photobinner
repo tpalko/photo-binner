@@ -8,18 +8,18 @@ from pytz import timezone
 import click
 import logging
 import re
-#import hashlib
-from hashbrowns import hash_equal
+import hashlib
 import shutil
 import pprint
 import json
 import importlib
 import glob
 from ConfigParser import ConfigParser
-from photobinner.source import Source
+from photobinner.source import Source, SourceFile
 from photobinner.exifwrapper import ExifWrapper
 from photobinner.logescrow import LogEscrow
 from pwd import getpwnam
+import traceback
 #from grp import getgrnam
 
 '''
@@ -106,6 +106,16 @@ class PhotoBinner(object):
         self.log_escrow = LogEscrow(name=__name__)
         self._initialize()
 
+    def _md5(self, fname):
+        hash_md5 = hashlib.md5()
+        with open(fname, "rb") as f:
+            for chunk in iter(lambda: f.read(4096), b""):
+                hash_md5.update(chunk)
+        return hash_md5.hexdigest()
+
+    def _hash_equal(self, path1, path2):
+        return self._md5(path1) == self._md5(path2)
+
     def _push_run_stat(self, type, key, value):
         if key not in self.run_stats[type]:
             self.run_stats[type][key] = []
@@ -151,9 +161,9 @@ class PhotoBinner(object):
       sde1              0782-073F                                     EOS_DIGITAL
     '''
 
-    def _extract_descriptive(self, full_path, mountpoint, exclude_descriptive):
+    def _extract_descriptive(self, sourcefile, mountpoint, exclude_descriptive):
         descriptive = None
-        ew = ExifWrapper(filepath=full_path)
+        ew = ExifWrapper(filepath=sourcefile.working_path)
         all_metadata = ew.all_values()
         if 'image_make' in all_metadata and 'image_model' in all_metadata and all_metadata['image_make'] in IMAGE_MAKERS:
             # -- Apple
@@ -173,7 +183,7 @@ class PhotoBinner(object):
             path_to_chuck = mountpoint.rstrip('/')
             for i in range(self.preserve_folders):
                 path_to_chuck = path_to_chuck.rpartition('/')[0]
-            base_removed = full_path.replace(path_to_chuck, '') if path_to_chuck else full_path
+            base_removed = sourcefile.original_path.replace(path_to_chuck, '') if path_to_chuck else sourcefile.original_path
             descriptive_path = base_removed.rpartition('/')[0]
             self.log_escrow.debug(" - descriptive path: %s" % descriptive_path)
 
@@ -209,8 +219,8 @@ class PhotoBinner(object):
 
         return descriptive
 
-    def _extract_date_from_path(self, full_path):
-        path = full_path.rpartition('/')[0]
+    def _extract_date_from_path(self, sourcefile):
+        path = sourcefile.original_path.rpartition('/')[0]
         date_matches = []
         date_matches.extend([ datetime.strptime(m, '%Y_%m_%d') for m in re.findall('[0-9]{4}_{1}[0-9]{2}_{1}[0-9]{2}', path) ])
         date_matches.extend([ datetime.strptime(m, '%Y-%m-%d') for m in re.findall('[0-9]{4}-{1}[0-9]{2}-{1}[0-9]{2}', path) ])
@@ -218,9 +228,9 @@ class PhotoBinner(object):
         self.log_escrow.debug(" - dates from path: %s" % [ datetime.strftime(d, "%Y-%m-%d %H:%M:%S %z") for d in date_matches ])
         return TZ.localize(date_matches[0]) if len(date_matches) > 0 else None
 
-    def _extract_date_from_filename(self, full_path):
-        self.log_escrow.debug(" - trying to match timestamp from filename: %s" % full_path)
-        match = re.search('[0-9]{8}[\_-]{1}[0-9]{6}', full_path)
+    def _extract_date_from_filename(self, sourcefile):
+        self.log_escrow.debug(" - trying to match timestamp from filename: %s" % sourcefile.original_path)
+        match = re.search('[0-9]{8}[\_-]{1}[0-9]{6}', sourcefile.original_path)
         filename_date = None
         if match:
             self.log_escrow.debug(" - filename timestamp: %s" % match.group())
@@ -243,9 +253,9 @@ class PhotoBinner(object):
     def _is_day_only(self, d):
         return d.hour == 0 and d.minute == 0 and d.second == 0
 
-    def _get_target_date(self, current_path):
+    def _get_target_date(self, sourcefile):
 
-        file_stats = os.stat(current_path)
+        file_stats = os.stat(sourcefile.working_path)
         # -- this assumed file was read as UTC, which is was not
         #target_date = UTC.localize(datetime.fromtimestamp(file_stats.st_mtime)).astimezone(TZ)
         # -- call file stats in local time
@@ -253,11 +263,11 @@ class PhotoBinner(object):
         target_atime = file_stats.st_atime
         target_mtime = file_stats.st_mtime
 
-        target_date_from_filename = self._extract_date_from_filename(current_path)
+        target_date_from_filename = self._extract_date_from_filename(sourcefile)
 
-        target_date_from_path = self._extract_date_from_path(current_path)
+        target_date_from_path = self._extract_date_from_path(sourcefile)
 
-        ew = ExifWrapper(filepath=current_path)
+        ew = ExifWrapper(filepath=sourcefile.working_path)
         target_date_from_exif = ew.image_datetime()
 
         # - in images from iphone backups, the timestamp of the file itself is accurate
@@ -279,7 +289,7 @@ class PhotoBinner(object):
             # - basically add back (once) the hours of the local offset - it was offset twice
             target_date_from_stat = target_date_from_stat + timedelta(hours=-target_date_from_stat.utcoffset().total_seconds()/(60*60))
             target_mtime = (target_date_from_stat - LOCAL_EPOCH).total_seconds()
-            self._push_run_stat('anomalies', 'file-date-double-timezoned', current_path)
+            self._push_run_stat('anomalies', 'file-date-double-timezoned', sourcefile.original_path)
 
         target_dates = {
             'stat': target_date_from_stat,
@@ -310,7 +320,7 @@ class PhotoBinner(object):
         # -- if metadata is more recent, it suggests iPhone
         if target_date_from_exif and target_date_from_stat and (target_date_from_exif - target_date_from_stat).total_seconds() > 1:
             self.log_escrow.warn(" - exif (%s) is newer than stat (%s) - iPhone?" % (datetime.strftime(target_date_from_exif, "%Y-%m-%d %H:%M:%S %z"), datetime.strftime(target_date_from_stat, "%Y-%m-%d %H:%M:%S %z")))
-            self._push_run_stat('anomalies', 'recent-exif', current_path)
+            self._push_run_stat('anomalies', 'recent-exif', sourcefile.original_path)
 
         # -- order to assign dates (highest priority is last!)
         date_source_priority = ['stat', 'path', 'filename', 'exif']
@@ -323,11 +333,11 @@ class PhotoBinner(object):
                 target_date_assigned_from = source
 
         self.log_escrow.info(" - target date assigned using %s: %s" % (target_date_assigned_from, datetime.strftime(target_date, "%Y-%m-%d %H:%M:%S %z")))
-        self._push_run_stat('date_sources', target_date_assigned_from, current_path)
+        self._push_run_stat('date_sources', target_date_assigned_from, sourcefile.original_path)
 
         if target_date.year in DEFAULT_YEARS:
             self.log_escrow.warn(" - target date almost surely invalid (%s)" % (datetime.strftime(target_date, "%Y-%m-%d")))
-            self._push_run_stat('anomalies', 'no-valid-date', current_path)
+            self._push_run_stat('anomalies', 'no-valid-date', sourcefile.original_path)
 
         # -- atime/mtime are by default what is already on the file
         # -- we want to avoid changing this unless it's completely wrong
@@ -345,31 +355,31 @@ class PhotoBinner(object):
         new_filename = None
 
         if target_date_from_filename and target_date and (target_date_from_filename - target_date).total_seconds() > 1:
-            filename = current_path.rstrip('/').rpartition('/')[-1]
+            filename = sourcefile.original_path.rstrip('/').rpartition('/')[-1]
             file_prefix = filename.split('_')[0]
             file_suffix = filename.split('.')[-1]
             new_filename_stamp = datetime.strftime(target_date, "%Y%m%d_%H%M%S")
             new_filename = "%s_%s.%s" %(file_prefix, new_filename_stamp, file_suffix)
             self.log_escrow.warn(" - timestamp extracted from filename does not match calculated timestamp, renaming %s -> %s" % (filename, new_filename))
-            self._push_run_stat('anomalies', 'filename-date-incorrect', current_path)
+            self._push_run_stat('anomalies', 'filename-date-incorrect', sourcefile.original_path)
 
         if target_date_from_path and datetime.strftime(target_date_from_path, "%Y-%m-%d") != datetime.strftime(target_date, "%Y-%m-%d"):
             self.log_escrow.warn(" - date extracted from path %s does not match calculated date %s" % (datetime.strftime(target_date_from_path, "%Y-%m-%d"), datetime.strftime(target_date, "%Y-%m-%d")))
-            self._push_run_stat('anomalies', 'path-date-incorrect', current_path)
+            self._push_run_stat('anomalies', 'path-date-incorrect', sourcefile.original_path)
 
         return (target_date, target_atime, target_mtime, new_filename, target_date_assigned_from,)
 
-    def _determine_move_action(self, current_path, target_folder, filename):
+    def _determine_move_action(self, sourcefile, target_folder, filename):
 
         move_necessary = False
         move_action = "not determined"
         new_path = os.path.join(target_folder, filename)
 
-        if current_path == new_path:
+        if sourcefile.original_path == new_path:
             move_action = " - current path is correct, matches calculated target"
         elif os.path.exists(new_path):
             self.log_escrow.warn(" - another file exists at destination path, comparing files..")
-            if hash_equal(current_path, new_path):
+            if self._hash_equal(sourcefile.working_path, new_path):
                 move_necessary = COPY_EXACT_MATCHES
                 if move_necessary:
                     self.log_escrow.warn(" - file at destination path is exact, moving to %s" % self.exact_matches_folder)
@@ -378,7 +388,7 @@ class PhotoBinner(object):
                     move_action = "exact match at target, moving to %s" % target_folder
                 else:
                     self.log_escrow.warn(" - file at destination path is exact, no action")
-                self._push_run_stat('anomalies', 'content-match-at-target', current_path)
+                self._push_run_stat('anomalies', 'content-match-at-target', sourcefile.original_path)
             else:
                 self.log_escrow.warn(" - file at destination path is different, we have a duplicate")
                 move_necessary = True
@@ -389,26 +399,22 @@ class PhotoBinner(object):
                     dupe_folder = os.path.join(target_folder, "dupe", str(dupe_count))
                     new_path = os.path.join(dupe_folder, filename)
                     move_action = "filename match, modifying new path -> %s" % new_path
-                    if os.path.exists(new_path) and current_path == new_path and hash_equal(current_path, new_path):
+                    if os.path.exists(new_path) and sourcefile.original_path == new_path and self._hash_equal(sourcefile.working_path, new_path):
                         move_action = " - this file already exists as a duplicate"
                         move_necessary = False
                         break
                     dupe_count = dupe_count + 1
                 target_folder = dupe_folder
-                self._push_run_stat('anomalies', 'filename-match-at-target', current_path)
+                self._push_run_stat('anomalies', 'filename-match-at-target', sourcefile.original_path)
         else:
-            move_action = "normal move %s -> %s" % (current_path, new_path)
+            move_action = "normal move %s -> %s" % (sourcefile.original_path, new_path)
             move_necessary = True
 
         return (target_folder, move_necessary, move_action,)
 
-    def _process_file(self, source, current_path=None):
+    def _process_file(self, source, sourcefile):
 
-        # -- Android sources don't have a 'mountpoint', nor would current_path ever be None
-        if not current_path:
-            current_path = source.mountpoint
-
-        current_path_parts = current_path.rpartition('/')
+        current_path_parts = sourcefile.original_path.rpartition('/')
         current_folder = current_path_parts[0]
         filename = current_path_parts[-1]
 
@@ -418,15 +424,15 @@ class PhotoBinner(object):
         # - implies that outside the file change block, logs must be < WARN
         heading_log_event = None if self.log_escrow.logger.isEnabledFor(logging.INFO) else 'move_necessary'
         self.log_escrow.debug("", event=heading_log_event)
-        self.log_escrow.info("Processing %s.." % current_path, event=heading_log_event)
+        self.log_escrow.info("Processing %s.." % sourcefile.original_path, event=heading_log_event)
 
-        (target_date, target_atime, target_mtime, new_filename, target_date_assigned_from,) = self._get_target_date(current_path)
+        (target_date, target_atime, target_mtime, new_filename, target_date_assigned_from,) = self._get_target_date(sourcefile)
 
         if not target_date:
             self.log_escrow.warn(" - no target date could be calculated")
             raise Exception("no target date could be calculated")
 
-        descriptive = self._extract_descriptive(current_path, source.mountpoint, source.exclude_descriptive)
+        descriptive = self._extract_descriptive(sourcefile, source.mountpoint, source.exclude_descriptive)
 
         if new_filename:
             filename = new_filename
@@ -438,7 +444,7 @@ class PhotoBinner(object):
 
         # -- working values
         target_folder = os.path.join(self.target_base_folder, year_string, descriptive_date)
-        (target_folder, move_necessary, move_action,) = self._determine_move_action(current_path, target_folder, filename)
+        (target_folder, move_necessary, move_action,) = self._determine_move_action(sourcefile, target_folder, filename)
         new_path = os.path.join(target_folder, filename)
 
         if move_necessary:
@@ -454,9 +460,9 @@ class PhotoBinner(object):
                 if not os.path.isdir(target_folder):
                     os.makedirs(target_folder)
 
-                file_stats = os.stat(current_path)
+                file_stats = os.stat(sourcefile.working_path)
                 self.log_escrow.info(" - %s MB" % str(int(file_stats.st_size)/(1024*1024)))
-                source.transfer_method(current_path, new_path, (target_atime, target_mtime,))
+                source.transfer_method(sourcefile.working_path, new_path, (target_atime, target_mtime,))
         else:
             self.log_escrow.info(" - %s" % move_action)
 
@@ -567,33 +573,43 @@ class PhotoBinner(object):
         open_sessions = []
 
         # -- gather up all the open sessions
+        # -- TODO: don't allow dry run sessions to be continued from wet ones
         for outfile in glob.glob(os.path.join(OUT_FOLDER, "photobinner_*%s.out" % ('_dry_run' if self.dry_run else ''))):
             j = self._get_json_content(outfile)
             if j and 'meta' in j and 'status' in j['meta'] and j['meta']['status'] == 'open':
                 open_sessions.append(outfile)
 
         # -- TODO: menu to choose a session
-        if len(open_sessions) > 1:
-            logger.warn("More than one open session was found. Please choose one:")
-            session_choice = None
-            while(not session_choice or int(session_choice)-1 not in range(len(open_sessions))):
-                for s in range(len(open_sessions)):
-                    print("(%s) %s" % ((s+1), open_sessions[s]))
-                session_choice = raw_input()
+        session_choice = None
+        if len(open_sessions) > 0:
+            logger.warn("Please choose a session:")
+        else:
+            logger.warn("Please choose:")
+        while not (session_choice and (session_choice.lower() in ['n','q'] or (session_choice.isdigit() and int(session_choice)-1 in range(len(open_sessions))))):
+            for s in range(len(open_sessions)):
+                print("(%s) %s" % ((s+1), open_sessions[s]))
+            print("(n)ew session")
+            print("(q)uit")
+            session_choice = raw_input()
+
+        if session_choice.isdigit():
             self.sessionfile = open_sessions[int(session_choice)-1]
             self.log_escrow.warn("Continuing session file: %s" % self.sessionfile)
             self.run_stats = self._get_json_content(self.sessionfile)
-        elif len(open_sessions) == 0:
+        elif session_choice.lower() == 'n':
             timestamp = datetime.strftime(datetime.now(), "%Y%m%d_%H%M%S")
             outfile_name = "photobinner_%s%s.out" % (timestamp, ('_dry_run' if self.dry_run else ''))
             self.sessionfile = os.path.join(OUT_FOLDER, outfile_name)
             self.log_escrow.warn("Starting a new session file: %s" % self.sessionfile)
             with open(self.sessionfile, 'w') as s:
                 s.write(json.dumps(self.run_stats))
-        elif len(open_sessions) == 1:
-            self.sessionfile = open_sessions[0]
-            self.log_escrow.warn("Continuing a session: %s" % self.sessionfile)
-            self.run_stats = self._get_json_content(self.sessionfile)
+        else: # session_choice.lower() == 'q':
+            exit(0)
+
+        # -- populated verified sources with processed files from previous runs
+        for v in [ v for v in self.verified_sources if v in self.run_stats['processed_files'] ]:
+            self.verified_sources[v].processed_files = self.run_stats['processed_files'][v]
+            logger.info("Source: %s -> Found %s processed files" % (v, len(self.verified_sources[v].processed_files)))
 
     def _initialize(self):
 
@@ -604,22 +620,15 @@ class PhotoBinner(object):
         self._identify_chosen_sources()
         self._verify_chosen_sources()
 
+        if len(self.verified_sources.keys()) == 0:
+            logger.debug("No provided source could be verified")
+            exit(1)
+
         if not os.path.exists(OUT_FOLDER):
             os.makedirs(OUT_FOLDER)
             os.chown(OUT_FOLDER, OWNER_UID, -1)
 
         self._load_session()
-
-        # -- populated verified sources with processed files from previous runs
-        for v in [ v for v in self.verified_sources if v in self.run_stats['processed_files'] ]:
-            self.verified_sources[v].processed_files = self.run_stats['processed_files'][v]
-            logger.debug("Source: %s -> Found %s processed files" % (v, len(self.verified_sources[v].processed_files)))
-
-        if len(self.verified_sources.keys()) == 0:
-            logger.debug("No provided source could be verified")
-            exit(1)
-
-        #self.log_escrow.info("%s Sources Verified" % len(self.verified_sources.keys()))
 
         # for g in glob.glob("bin/sources/*.py"):
         #     if g == "bin/sources/__init__.py":
@@ -660,7 +669,8 @@ class PhotoBinner(object):
                 if source.mountpoint and os.path.isfile(source.mountpoint):
                     self.log_escrow.info("Processing %s " % source.mountpoint)
                     try:
-                        self._process_file(source=source)
+                        sourcefile = SourceFile(source.mountpoint)
+                        self._process_file(source=source, sourcefile=sourcefile)
                         run_stat['file_count'] += 1
                         source.processed_files.append(source.mountpoint)
                     except:
@@ -670,20 +680,24 @@ class PhotoBinner(object):
                         traceback.print_tb(sys.exc_info()[2])
                 else:
                     self.log_escrow.info("Processing paths from source..")
-                    for (original_path, current_path) in source.paths():
+                    for sf in source.paths():
                         if self.sigint:
                             break
                         try:
-                            self._process_file(source=source, current_path=current_path)
+                            self._process_file(source=source, sourcefile=sf)
                             run_stat['file_count'] += 1
-                            source.processed_files.append(original_path)
+                            source.processed_files.append(sf.original_path)
                         except:
-                            self.log_escrow.error("Exception caught processing file: %s (%s)" % (current_path, original_path))
+                            self.log_escrow.error("Exception caught processing file: %s (%s)" % (sf.working_path, sf.original_path))
                             self.log_escrow.error(str(sys.exc_info()[0]))
                             self.log_escrow.error(str(sys.exc_info()[1]))
                             traceback.print_tb(sys.exc_info()[2])
             except:
                 run_stat['exception'] = str(sys.exc_info()[1])
+                run_stat['stack_trace'] = str(traceback.extract_tb(sys.exc_info()[2]))
+                self.log_escrow.error(str(sys.exc_info()[0]))
+                self.log_escrow.error(str(sys.exc_info()[1]))
+                traceback.print_tb(sys.exc_info()[2])
 
             self.log_escrow.info("Closing the run..")
             run_stat['stop'] = datetime.strftime(datetime.now(), "%Y-%m-%dT%H:%M:%S")
@@ -706,6 +720,7 @@ class PhotoBinner(object):
         os.chown(self.sessionfile, OWNER_UID, -1)
         #pprint.pprint(self.run_stats, indent=4)
 
+        self.log_escrow.info("Session %s end" % self.sessionfile)
         self.log_escrow.info("All operations complete.")
 
 @click.command()

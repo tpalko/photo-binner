@@ -3,7 +3,7 @@ import sys
 import subprocess
 import logging
 from datetime import datetime
-from photobinner.source import Source
+from photobinner.source import Source, SourceFile
 import traceback
 
 logger = logging.getLogger(__name__)
@@ -14,7 +14,7 @@ def classdef():
 class Android(Source):
 
     device = None
-    paths = []
+    search_paths = []
     adb_key_path = None
 
     def sigint_handler(self):
@@ -27,6 +27,7 @@ class Android(Source):
         from adb import sign_m2crypto
 
         # KitKat+ devices require authentication
+        logger.info("Using %s.." % self.adb_key_path)
         signer = sign_m2crypto.M2CryptoSigner(op.expanduser(self.adb_key_path))
         # Connect to the device
         self.device = adb_commands.AdbCommands()
@@ -48,7 +49,7 @@ class Android(Source):
             if self.from_date:
                 delta = datetime.now() - self.from_date
                 ctime_filter = ' -ctime -%s' % delta.days
-            for path in self.paths:
+            for path in self.search_paths:
                 #  -name \"%s\"
                 cmd_find = 'find \"%s\" -type f%s' % (path, ctime_filter)
                 raw_files = self.device.Shell(cmd_find)
@@ -69,7 +70,7 @@ class Android(Source):
             for filepath in self.files[path]:
                 logger.debug(" - have file %s" % filepath)
                 if self._is_processed(filepath):
-                    logger.warn("%s found as processed, skipping.." % filepath)
+                    logger.debug("%s found as processed, skipping.." % filepath)
                     continue
                 filename = filepath.rpartition('/')[-1]
                 if filename.strip() == '':
@@ -89,7 +90,7 @@ class Android(Source):
                     logger.debug(" - attempting to pull %s -> %s" % (filepath, targetfilepath))
                     targetfile.write(self.device.Pull(filepath))
                 # -- convention is to yield the original filepath and the modified/accessible filepath (if modified)
-                yield (filepath, targetfilepath)
-                logger.warn("Deleting %s.." % targetfilepath)
+                yield SourceFile(filepath, targetfilepath)
+                logger.debug("Deleting %s.." % targetfilepath)
                 if os.path.exists(targetfilepath):
                     os.remove(targetfilepath)

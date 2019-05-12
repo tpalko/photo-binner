@@ -14,7 +14,7 @@ type = Android
 exclude_descriptive = tmp
 transfer_method = move
 adb_key_path = /probably/home/username/.android/adbkey
-paths = "/various/paths","/on/device"
+search_paths = "/various/paths","/on/device"
 
 [Source-ExampleMySDCard]
 type = BlockDevice

@@ -21,6 +21,15 @@ FIX_EXCLUDES = [
 
 DEFAULT_MASK = "*"
 
+class SourceFile():
+
+    original_path = None
+    working_path = None
+
+    def __init__(self, *args, **kwargs):
+        self.original_path = args[0]
+        self.working_path = args[1] if len(args) > 1 else self.original_path
+
 class Source():
 
     __metaclass__ = ABCMeta

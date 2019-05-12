@@ -1,6 +1,5 @@
-#adb
+adb==1.3.0
 exifread
 click
 pytz
 ConfigParser
-hashbrowns
