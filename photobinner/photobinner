@@ -60,7 +60,7 @@ UTC_EPOCH = UTC.localize(EPOCH)
 LOCAL_EPOCH = UTC_EPOCH.astimezone(TZ)
 DEFAULT_YEARS = [1970, 1980]
 
-OUT_FOLDER = 'out'
+OUT_FOLDER = '/media/storage/development/github.com/photo-binner/out'
 
 OWNER_UID = os.getuid()
 if 'owner' in config.defaults():
@@ -575,6 +575,7 @@ class PhotoBinner(object):
         # -- gather up all the open sessions
         # -- TODO: don't allow dry run sessions to be continued from wet ones
         for outfile in glob.glob(os.path.join(OUT_FOLDER, "photobinner_*%s.out" % ('_dry_run' if self.dry_run else ''))):
+            logger.info("Examining outfile: %s" % outfile)
             j = self._get_json_content(outfile)
             if j and 'meta' in j and 'status' in j['meta'] and j['meta']['status'] == 'open':
                 open_sessions.append(outfile)
@@ -625,8 +626,11 @@ class PhotoBinner(object):
             exit(1)
 
         if not os.path.exists(OUT_FOLDER):
+            logger.info("Creating out folder: %s" % OUT_FOLDER)
             os.makedirs(OUT_FOLDER)
             os.chown(OUT_FOLDER, OWNER_UID, -1)
+        else:
+            logger.info("Out folder found: %s" % OUT_FOLDER)
 
         self._load_session()
 
