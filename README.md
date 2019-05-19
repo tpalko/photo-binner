@@ -164,3 +164,4 @@ Possibly worth noting ..
 - add 'session name' parameter, adds to filename and metadata
 - session filename timestamp in metadata
 - add exclude descriptive text control in command line arguments
+
