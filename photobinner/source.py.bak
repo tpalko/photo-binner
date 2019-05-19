@@ -30,7 +30,9 @@ class SourceFile():
         self.original_path = args[0]
         self.working_path = args[1] if len(args) > 1 else self.original_path
 
-class Source(metaclass=ABCMeta):
+class Source():
+
+    __metaclass__ = ABCMeta
 
     name = None
     mountpoint = None

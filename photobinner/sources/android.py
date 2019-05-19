@@ -5,6 +5,7 @@ import logging
 from datetime import datetime
 from photobinner.source import Source, SourceFile
 import traceback
+from adb import adb_commands, sign_m2crypto, usb_exceptions
 
 logger = logging.getLogger(__name__)
 
@@ -21,14 +22,10 @@ class Android(Source):
         return self._sigint_handler()
 
     def verify(self):
-        import os.path as op
-
-        from adb import adb_commands
-        from adb import sign_m2crypto
 
         # KitKat+ devices require authentication
         logger.info("Using %s.." % self.adb_key_path)
-        signer = sign_m2crypto.M2CryptoSigner(op.expanduser(self.adb_key_path))
+        signer = sign_m2crypto.M2CryptoSigner(os.path.expanduser(self.adb_key_path))
         # Connect to the device
         self.device = adb_commands.AdbCommands()
         try:
@@ -41,7 +38,10 @@ class Android(Source):
             if kill_server_err:
                 logger.error(kill_server_err)
             logger.info("Attempting device connection..")
-            self.device.ConnectDevice(rsa_keys=[signer])
+            try:
+                self.device.ConnectDevice(rsa_keys=[signer])
+            except usb_exceptions.DeviceNotFoundError as d:
+                print(d)
             logger.info("Examining filepaths..")
             self.files = {}
             any_files = False

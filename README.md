@@ -160,7 +160,7 @@ Possibly worth noting ..
 - allow configurable arbitrary path to plugin sources
 - broader deduplication
 - other fun things to do with image files while we're in there anyway   
-- python 3!
 - add 'session name' parameter, adds to filename and metadata
 - session filename timestamp in metadata
 - add exclude descriptive text control in command line arguments
+- python 3! (M2Crypto isn't quite there yet..?)

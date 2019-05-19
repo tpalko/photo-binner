@@ -129,22 +129,22 @@ class ExifWrapper(object):
     def show_exif_keys(self):
         for i, key, _ in self.exif_key_gen():
             self.exif_keymap[i+1] = key
-            print(("%s: %s" % (i+1, key)))
+            print("%s: %s" % (i+1, key))
         print("Which key? ")
-        key_number = eval(input())
+        key_number = input()
         self.read_exif_key(self.exif_keymap[key_number])
 
     def read_exif_key(self, key):
         if os.path.isdir(self.filepath):
-            print(("%s:" % key))
+            print("%s:" % key)
             for path in glob("%s/*" % self.filepath):
                 with open(path) as f:
                     TAGS = exifread.process_file(f, details=False)
-                    print(("%s: %s" % (path, TAGS[key])))
+                    print("%s: %s" % (path, TAGS[key]))
         else:
             with open(self.filepath) as f:
                 TAGS = exifread.process_file(f, details=False)
-                print(("%s: %s" % (key, TAGS[key])))
+                print("%s: %s" % (key, TAGS[key]))
 
 alive = True
 def sigint_handler(sig, frame):
@@ -171,16 +171,16 @@ def main(full, timezone, filepath, assume_local):
     }
 
     while(alive):
-        for i in list(command_map.keys()):
-            print(("%s) %s" % (i, command_map[i]['m'])))
+        for i in command_map.keys():
+            print("%s) %s" % (i, command_map[i]['m']))
         try:
-            command = eval(input())
+            command = input()
             command_map[str(command)]['f']()
         except SyntaxError as se:
             if not str(sys.exc_info()[1]).startswith('unexpected EOF'):
-                print((sys.exc_info()))
+                print(sys.exc_info())
         except:
-            print((sys.exc_info()))
+            print(sys.exc_info())
 
 if __name__ == "__main__":
     main()

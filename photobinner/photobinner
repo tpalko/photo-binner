@@ -14,7 +14,7 @@ import pprint
 import json
 import importlib
 import glob
-from ConfigParser import ConfigParser
+from configparser import ConfigParser
 from photobinner.source import Source, SourceFile
 from photobinner.exifwrapper import ExifWrapper
 from photobinner.logescrow import LogEscrow
@@ -101,7 +101,8 @@ class PhotoBinner(object):
             self.__setattr__(k, kwargs[k])
         for v in [ v for v in dir(self) if v.find("_") != 0 ]:
             t = type(self.__getattribute__(v))
-            if t in [str, int, bool, unicode] or not t:
+            print('attribute type: %s (%s)' % (v, t))
+            if t in [str, int, bool] or not t:
                 logger.debug("%s: %s" % (v, self.__getattribute__(v)))
         self.log_escrow = LogEscrow(name=__name__)
         self._initialize()
@@ -748,7 +749,7 @@ def main(user_source, target, mask, from_date, preserve_folders, dry_run, setup_
     #     target defaults to DEFAULT_TARGET but can be overwritten
     # 'sort' means organizing into year/date tree, and this implies "fixing" an existing, possibly incorrect, year/date tree
 
-    loglevel = int(logging._levelNames[loglevel.upper()])
+    loglevel = int(logging._nameToLevel[loglevel.upper()])
     logging.basicConfig(level=loglevel)
 
     cfg = {
