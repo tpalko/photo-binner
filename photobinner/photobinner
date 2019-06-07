@@ -459,6 +459,7 @@ class PhotoBinner(object):
                 # - create final path
                 if not os.path.isdir(target_folder):
                     os.makedirs(target_folder)
+                    os.chown(target_folder, OWNER_UID, -1)
 
                 file_stats = os.stat(sourcefile.working_path)
                 self.log_escrow.info(" - %s MB" % str(int(file_stats.st_size)/(1024*1024)))
@@ -573,8 +574,7 @@ class PhotoBinner(object):
         open_sessions = []
 
         # -- gather up all the open sessions
-        # -- TODO: don't allow dry run sessions to be continued from wet ones
-        for outfile in glob.glob(os.path.join(OUT_FOLDER, "photobinner_*%s.out" % ('_dry_run' if self.dry_run else ''))):
+        for outfile in [ g for g in glob.glob(os.path.join(OUT_FOLDER, "*")) if re.search("photobinner_[0-9]{8}(_[0-9]{6})?%s.out" % ('_dry_run' if self.dry_run else ''), g) ]:
             logger.info("Examining outfile: %s" % outfile)
             j = self._get_json_content(outfile)
             if j and 'meta' in j and 'status' in j['meta'] and j['meta']['status'] == 'open':
@@ -598,8 +598,14 @@ class PhotoBinner(object):
             self.log_escrow.warn("Continuing session file: %s" % self.sessionfile)
             self.run_stats = self._get_json_content(self.sessionfile)
         elif session_choice.lower() == 'n':
+            good_name = None
+            while(not good_name):
+                print("Enter a name for the new session (numbers and letters only please):")
+                session_name = raw_input()
+                if len([ t for t in session_name.split(' ') if not t.isalnum() ]) == 0:
+                    good_name = session_name.replace(' ', '_').lower()
             timestamp = datetime.strftime(datetime.now(), "%Y%m%d_%H%M%S")
-            outfile_name = "photobinner_%s%s.out" % (timestamp, ('_dry_run' if self.dry_run else ''))
+            outfile_name = "photobinner_%s%s%s.out" % (timestamp, ('_dry_run' if self.dry_run else ''), "_%s" % good_name if good_name else "")
             self.sessionfile = os.path.join(OUT_FOLDER, outfile_name)
             self.log_escrow.warn("Starting a new session file: %s" % self.sessionfile)
             with open(self.sessionfile, 'w') as s:
@@ -661,6 +667,7 @@ class PhotoBinner(object):
 
         if not os.path.exists(self.exact_matches_folder):
             os.makedirs(self.exact_matches_folder)
+            os.chown(self.exact_matches_folder, OWNER_UID, -1)
 
         for s in self.verified_sources.keys():
             source = self.verified_sources[s]
