@@ -30,6 +30,9 @@ class SourceFile():
         self.original_path = args[0]
         self.working_path = args[1] if len(args) > 1 else self.original_path
 
+class StitchFolder(SourceFile):
+    pass
+
 class Source():
 
     __metaclass__ = ABCMeta
@@ -42,6 +45,8 @@ class Source():
     from_date = None
     mask = DEFAULT_MASK
     processed_files = []
+    stitch_folder_match = "^STITCH_[0-9]+$"
+    stitch_folders = []
 
     def __init__(self, *args, **kwargs):
         for k in kwargs:
@@ -104,7 +109,9 @@ class Source():
         self.logger.debug("Walking %s.." % self.mountpoint)
         self.logger.debug("Excluding folders: %s" % FIX_EXCLUDES)
         for (current_folder, dirnames, filenames) in os.walk(self.mountpoint, topdown=True):
-            dirnames[:] = [ d for d in dirnames if os.path.abspath(d) not in FIX_EXCLUDES ]
+            self.stitch_folders.extend([ os.path.join(self.mountpoint, d) for d in dirnames if re.search(self.stitch_folder_match, d) ])
+            self.logger.info(" - %s stitch folders found: %s" % (len(self.stitch_folders), ",".join(self.stitch_folders)))
+            dirnames[:] = [ d for d in dirnames if os.path.abspath(d) not in FIX_EXCLUDES and not re.search(self.stitch_folder_match, d) ]
             image_files = self._filter(filenames)
             for filename in image_files:
                 filepath = os.path.join(current_folder, filename)
@@ -112,6 +119,11 @@ class Source():
                     self.logger.debug(" - found as processed, skipping..")
                     continue
                 yield filepath
+
+    def _stitch_folders(self):
+        self.logger.info("Now processing stitch folders (Source)..")
+        for stitch_folder in self.stitch_folders:
+            yield stitch_folder
 
     def _sigint_handler(self, callback=None):
         def handler(sig, frame):

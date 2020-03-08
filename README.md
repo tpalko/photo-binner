@@ -1,16 +1,15 @@
 # photobinner
 
-Sorts image files into a two-level folder structure:  YYYY/YYYY-MM-DD/.
+This program, broadly, does one thing: sorts image files into a two-level folder structure:  YYYY/YYYY-MM-DD/.
 
-This program does basically one thing, additionally:
+Additionally / optionally:
 
-* verifies the target date folder with EXIF metadata, the file's modification time, and a possible timestamp in the filename (e.g. IMG_20190118_120533.JPG)
-* extracts descriptive text from the original folder structure to include in the final destination folder name
-* tracks history to avoid re-copying the same file in future runs
+* verifies the target date folder using EXIF metadata, the file's modification time, and a possible timestamp in the filename (e.g. IMG_20190118_120533.JPG)
+* includes descriptive text in the destination folder name, extracting the text from the original folder structure
+* prevents re-copying files by tracking a history of processed files
 * collects statistics (anomalies/inconsistencies found, source/destination bin counts)
 * compares the MD5 hash of supposed duplicates to prevent loss of misnamed files
-* works with multiple sources at once to converge at a single destination
-* comes with source type implementations supporting Android (adb), block devices, and general folders
+* works with multiple sources at once to converge at a single destination, supporting Android (adb), block devices, and general folders out of the box
 * has a pluggable architecture for source types, so you can write your own!
 * has a versatile configuration file for easy control over its behavior
 
@@ -44,21 +43,21 @@ This program does not:
 #### A Note About adb (Android Debug Bridge)
 
 *A note about noting adb:*
-`photobinner` started out just copying files from one place to another on any old
-computer with Python. This is still _the_ primary supported use case, and if this helps
-you we can stick with that. If rolling your smartphone into your photo library
-curating process is a priority for you, we can do that too. Read on.
+`photobinner` started out just sorting files between folders. This is still _the_
+primary supported use case, and if this satisfies you, stick with that and don't
+worry about `adb`. If rolling your smartphone into your photo library
+curating process is a priority for you, read on.
 
-*`photobinner` is tested on Debian Stretch. There has been absolutely zero testing on Mac or Windows.*
+*`photobinner` is tested on GNU/Linux distributions. There has been absolutely zero testing on Mac or Windows.*
 
-Your Android smartphone will be accessed by `photobinner` from your Linux computer using
-`adb`, the Android Debug Bridge. For Android 4.2.2 and up, this will require an RSA keypair.
+Your Android smartphone can be accessed by `photobinner` from your Linux computer using
+`adb`, the Android Debug Bridge. For Android 4.2.2 and up, this access will require an RSA keypair.
 
-The Python module `adb` is available through PyPi. If you want to have the command-line
-`adb` tool, at least on Debian Stretch this is available from the `adb` package. Installing
-this will also give you `android-sdk-platform-tools-common`, which contains the udev
+The Python module `adb` is available through PyPi. If you want the command-line
+`adb` tool, this is available with the `adb` package, at least on Debian Stretch. Installing
+`adb` will also give you `android-sdk-platform-tools-common`, which contains the udev
 rules for Android devices. Command-line `adb` is probably necessary to generate
-a public and private key. I haven't done a full test using a clean system to determine
+the requisite keypair. I haven't done a full, clean system test to determine
 exactly what is necessary, but if you install the `adb` package, can run `adb devices`
 and see your device listed, and can run `adb shell` successfully, then `photobinner`
 will likely not have a problem. Before trying to generate the keys, just run the `adb`
@@ -68,25 +67,19 @@ commands to see what happens - it may generate what it needs automatically.
 
 1. Copy the file `pbrc.example` to your home folder as `~/.pbrc`
 2. Configure `~/.pbrc`, setting values for you, as a person
-3. Install dependencies:
-
-```
-$ pip install -r requirements.txt
-```
-
-4. Run the command to install `photobinner`
+3. Run the command to install `photobinner`
 
 ```
 $ python setup.py install
 ```
 
-5. Run the command to see `photobinner`'s options:
+4. Run the command to see `photobinner`'s options:
 
 ```
 $ photobinner -h
 ```
 
-6. Say out loud
+5. Say out loud
 
 ```
 This is software I downloaded from the internet. If I run it, whatever it does is
@@ -94,11 +87,15 @@ ultimately nobody's responsibility but my own. I am free to read the code, learn
 Python if necessary, to ensure the safety of my files.
 ```
 
-7. When you're familiar with its options, run it for real:
+6. When you're familiar with its options, run it for real:
 
 ```
 $ photobinner <options>
 ```
+
+_NOTE: Python dependencies should be installed along with `photobinner`, however if
+you find missing packages when running it, these can be installed manually with
+`pip install -r requirements.txt`_
 
 I emphasize inspecting the `--help` because this program is messing with your photos. You know, those
 things you make sure to grab before running out of your burning home. (sorry) That said,
@@ -148,21 +145,31 @@ Possibly worth noting ..
 
 ### Exception Handling
 
+## Bugs
+
+- when multiple sources validate, the message after selecting a session only reports counts for one of them. verify
+how the session file is parsed when selected and that all sources are accounted for properly.
+- '001' added to exclude_descriptive command line parameter doesn't remove this from descriptive text
+- history tracking to avoid re-copying the same file does not account for device-assigned file number rollover IMG_9999.JPG, IMG_0000.JPG, ..
+- detection of "double timezoning" may be generating false positives
+
+## Verify Complete
+
+- use actual path for session logging
+
 ## Future Work
 
+- broader deduplication
+  - incorporate light database to index hash sums for more thorough duplicate identification
+  - provide duplicate finding as a primary operation
 - progress bar
-- use actual path for session logging
 - work in as much processing pre-adb copy (target determination) to skip duplicates before pulling
 - flesh out session file lifetime
   - one file for all eternity? this gets big
 - flesh out global options vs. per-source
-- report each change made / reverse processing
+- record all file modifications / provide "undo" operation
 - allow configurable arbitrary path to plugin sources
-- broader deduplication
 - other fun things to do with image files while we're in there anyway   
 - python 3!
-- add 'session name' parameter, adds to filename and metadata
+- add 'session name' parameter to metadata
 - session filename timestamp in metadata
-- add exclude descriptive text control in command line arguments
-
-

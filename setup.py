@@ -1,16 +1,28 @@
-from distutils.core import setup
+import setuptools
 
-setup(
+with open("README.md", "r") as fh:
+    long_description = fh.read()
+
+setuptools.setup(
     name="photobinner",
     version="0.1",
-    description="Organize image files by year and date, preserving descriptive text from existing folders",
     author="Tim Palko",
     author_email="tim@palkosoftware.com",
+    description="Organize image files by year and date, preserving descriptive text from existing folders",
+    long_description=long_description,
+    long_description_content_type="text/markdown",
     url="https://github.com/tpalko/photo-binner",
-    download_url="http://palkosoftware.ddns.net/scripts/photobinner.tar.gz",
-    packages=['photobinner', 'photobinner.sources'],
-    scripts=['photobinner/photobinner'],
+    packages=setuptools.find_packages(), #['photobinner', 'photobinner.sources'],
+    classifiers=[
+        "Programming Language :: Python :: 3",
+        "License :: OSI Approved :: GNU GPLv3 License",
+        "Operating System :: OS Independent",
+    ],
+    python_requires='>=3.5',
+#    scripts=['photobinner/photobinner'],
+ #   entry_points=dict(console_scripts=['photobinner=photobinner:main']),
+#    install_requires=['adb==1.3.0','exifread','click','pytz','ConfigParser'],
     # packages=['', 'sources'],
     # package_dir={'': 'bin', 'sources': 'bin/sources'},
-    license='MIT'
+ #   license='GNU GPLv3'
 )

@@ -3,7 +3,7 @@ import sys
 import subprocess
 import logging
 from datetime import datetime
-from photobinner.source import Source, SourceFile
+from ../photobinner.source import Source, SourceFile
 import traceback
 
 logger = logging.getLogger(__name__)
@@ -22,9 +22,17 @@ class Android(Source):
 
     def verify(self):
         import os.path as op
-
         from adb import adb_commands
         from adb import sign_m2crypto
+
+        # device = adb_commands.AdbCommands()
+        # adb_key_path = '/home/debian/tpalko/.android/adbkey'
+        # signer = sign_m2crypto.M2CryptoSigner(op.expanduser(adb_key_path))
+        # device.ConnectDevice(rsa_keys=[signer])
+        # path = '/mnt/sdcard'
+        # ctime_filter = ''
+        # cmd_find = 'find \"%s\" -type f%s' % (path, ctime_filter)
+        # raw_files = self.device.Shell(cmd_find)
 
         # KitKat+ devices require authentication
         logger.info("Using %s.." % self.adb_key_path)

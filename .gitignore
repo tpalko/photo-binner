@@ -1,4 +1,5 @@
 out/*
+output.txt
 *.pyc
 doc
 build
