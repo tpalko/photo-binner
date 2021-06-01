@@ -39,6 +39,7 @@ class Source():
 
     name = None
     mountpoint = None
+    target = None
     exclude_descriptive = None
     transfer_method = None
     filename_mask = "*.mp4"
@@ -49,12 +50,14 @@ class Source():
     stitch_folders = []
 
     def __init__(self, *args, **kwargs):
+        logging.basicConfig(level=logging.DEBUG)
+        self.logger = logging.getLogger(__name__)
         for k in kwargs:
             val = kwargs[k]
             if type(kwargs[k]) == str and kwargs[k].count(",") > 0:
                 val = kwargs[k].split(',')
             self.__setattr__(k, val)
-        self.logger = logging.getLogger(__name__)
+            self.logger.debug(" - set attribute %s: %s" % (k, val))
 
     @abstractmethod
     def verify(self):
@@ -69,7 +72,7 @@ class Source():
         pass
 
     def _filter_media_files(self, filenames):
-        return [ f for f in filenames if f[0:2] != "._" and (f[-3:].lower() in ("jpg", "gif", "png", "raw", "mov", "crw", "cr2", "avi", "mp4", "bmp", "psd") or f[-4:] in ("tiff")) ]
+        return [ f for f in filenames if f[0:2] != "._" and (f[-3:].lower() in ("jpg", "gif", "png", "raw", "mov", "crw", "cr2", "avi", "mp3", "mp4", "bmp", "psd") or f[-4:] in ("tiff")) ]
 
     def _filter_video_files(self, filenames):
         return [ f for f in filenames if f[0:2] != "._" and f[-3:].lower() in ("mov", "avi", "mp4") ]
@@ -88,11 +91,11 @@ class Source():
     def _is_not_empty(self):
         self.logger.debug("Checking if not empty: %s" % self.mountpoint)
         notempty = False
-        if not os.path.exists(self.mountpoint):
-            self.logger.warn("Supplied path '%s' does not exist" % self.mountpoint)
-        elif os.path.isfile(self.mountpoint):
+        # if not os.path.exists(self.mountpoint):
+        #     self.logger.warn("Supplied path '%s' does not exist" % self.mountpoint)
+        if os.path.isfile(self.mountpoint):
             notempty = True
-            self.logger.debug(" - this file exists")
+            self.logger.debug(" - source exists as a file")
         else:
             for (current_folder, dirnames, filenames) in os.walk(self.mountpoint, topdown=True):
                 filenames = self._filter(filenames)
@@ -116,7 +119,7 @@ class Source():
             for filename in image_files:
                 filepath = os.path.join(current_folder, filename)
                 if self._is_processed(filepath):
-                    self.logger.debug(" - found as processed, skipping..")
+                    self.logger.info(" - %s found as processed, skipping.." % filepath)
                     continue
                 yield filepath
 

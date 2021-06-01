@@ -2,7 +2,7 @@ import os
 import sys
 import subprocess
 import logging
-from photobinner.source import Source, SourceFile, StitchFolder
+from sources.source import Source, SourceFile, StitchFolder
 
 logger = logging.getLogger(__name__)
 

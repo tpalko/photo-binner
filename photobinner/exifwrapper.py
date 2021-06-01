@@ -43,17 +43,22 @@ class ExifWrapper(object):
         if exifread_logger.getEffectiveLevel() == 10:
             exifread_logger.setLevel(20)
 
+    def _get_file_tags(self, filepath, details=False):
+        tags = None 
+        with open(filepath, 'rb') as f:
+            tags = exifread.process_file(f, details=details)
+        return tags
+
     def _extract_all_metadata(self):
         '''
         Looks for all EXIF keys referenced in each key type in VALUE_MAP and returns a dict of the first value found for each type.
         '''
         values = {}
-        with open(self.filepath) as f:
-            TAGS = exifread.process_file(f, details=False)
-            for key in VALUE_MAP:
-                for tag in VALUE_MAP[key]:
-                    if tag in TAGS and key not in values:
-                        values[key] = TAGS[tag]
+        TAGS = self._get_file_tags(self.filepath)
+        for key in VALUE_MAP:
+            for tag in VALUE_MAP[key]:
+                if tag in TAGS and key not in values:
+                    values[key] = TAGS[tag]
         return values
 
     def _extract_metadata_for_key(self, key=None):
@@ -63,13 +68,12 @@ class ExifWrapper(object):
         if not key:
             return self._extract_all_metadata()
         value = None
-        with open(self.filepath) as f:
-            TAGS = exifread.process_file(f, details=False)
-            for tag in VALUE_MAP[key]:
-                if tag in TAGS and not value:
-                    value = TAGS[tag]
-                    if value:
-                        break
+        TAGS = self._get_file_tags(self.filepath)
+        for tag in VALUE_MAP[key]:
+            if tag in TAGS and not value:
+                value = TAGS[tag]
+                if value:
+                    break
         return value
 
     def _fix_timezone(self, image_datetime):
@@ -120,10 +124,9 @@ class ExifWrapper(object):
         # -- we are assuming the folder only contains image files
         if os.path.isdir(path):
             path = glob("%s/*" % path)[0]
-        with open(path) as f:
-            TAGS = exifread.process_file(f, details=False)
-            for i, key in enumerate(TAGS):
-                yield (i, key, TAGS[key])
+        TAGS = self._get_file_tags(self.filepath)
+        for i, key in enumerate(TAGS):
+            yield (i, key, TAGS[key])
 
     exif_keymap = {}
     def show_exif_keys(self):
@@ -138,13 +141,11 @@ class ExifWrapper(object):
         if os.path.isdir(self.filepath):
             print("%s:" % key)
             for path in glob("%s/*" % self.filepath):
-                with open(path) as f:
-                    TAGS = exifread.process_file(f, details=False)
-                    print("%s: %s" % (path, TAGS[key]))
+                TAGS = self._get_file_tags(path)
+                print("%s: %s" % (path, TAGS[key]))
         else:
-            with open(self.filepath) as f:
-                TAGS = exifread.process_file(f, details=False)
-                print("%s: %s" % (key, TAGS[key]))
+            TAGS = self._get_file_tags(self.filepath)
+            print("%s: %s" % (key, TAGS[key]))
 
 alive = True
 def sigint_handler(sig, frame):

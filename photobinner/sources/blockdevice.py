@@ -1,9 +1,11 @@
 import os
+import time
 import sys
 import subprocess
 import logging
-from photobinner.source import Source, SourceFile
+from sources.source import Source, SourceFile
 
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 def classdef():
@@ -17,15 +19,17 @@ class BlockDevice(Source):
     block_label = None
 
     def _attempt_mount(self):
+        if not os.path.exists(self.mountpoint):
+            logger.debug(" - creating %s" % self.mountpoint)
+            os.makedirs(self.mountpoint)
         ps_mount = subprocess.Popen(['mount', 'UUID=%s' % self.uuid, self.mountpoint])
         logger.info("Attempting to mount device..")
         (mountout, mounterr) = ps_mount.communicate(None)
         if mounterr:
             logger.error(mounterr)
-            return False
         if mountout:
             logger.debug(mountout)
-        return True
+        return ps_mount.returncode == 0
 
     def _attempt_umount(self):
         ps_umount = subprocess.Popen(['umount', self.mountpoint])
@@ -42,28 +46,15 @@ class BlockDevice(Source):
         uuid = None
         try:
             ps_blkid = subprocess.Popen(['blkid'], stdout=subprocess.PIPE)
-            ps_grepblkid = subprocess.Popen(['grep', self.block_label], stdin=ps_blkid.stdout, stdout=subprocess.PIPE)
+            ps_grepblkid = subprocess.Popen(['grep', self.block_label], stdin=ps_blkid.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             (blkout, blkerr) = ps_grepblkid.communicate(None)
             if blkout and len(blkout.strip()) > 0:
-                uuid = blkout.split(' ')[2].split('=')[1].strip('"')
+                uuid = str(blkout).split(' ')[2].split('=')[1].strip('"')
             else:
                 logger.info("Ain't got no device attached!")
         except OSError as oe:
             logger.error("'blkid' failed -- try sudo")
         return uuid
-
-    def _check_mountpoint(self, mountpoint):
-        if os.path.exists(mountpoint):
-            logger.info("Device appears to be attached and mounted!")
-            return True
-        else:
-            logger.info("Device is attached, but it ain't mounted!")
-            return False
-
-    def _check_mountpoint_folder(self, mountpoint):
-        if not os.path.isdir(mountpoint):
-            logger.info("Creating mount folder..")
-            os.makedirs(mountpoint)
 
     # def _sigint_handler(sig, frame, what):
     #     self._attempt_umount()
@@ -73,24 +64,31 @@ class BlockDevice(Source):
 
     def verify(self):
         mounted = False
-        self.uuid = self._check_attached_device()
-        if self.uuid:
-            mount_attempts = 0
-            MAX_ATTEMPTS = 3
-            mounted = self._check_mountpoint(os.path.join(self.mountpoint, BLOCK_MOUNT_VERIFICATION_SUBFOLDER))
+        if not self.uuid:
+            self.uuid = self._check_attached_device()
+        logger.debug(" - UUID=%s" % self.uuid)
+        if not self.uuid:
+            logger.warn(" - no UUID found")
+        else:
+            mount_count = 1
+            MAX_ATTEMPTS = 1
+            verify_folder = os.path.join(self.mountpoint, BLOCK_MOUNT_VERIFICATION_SUBFOLDER)
+            mounted = os.path.exists(verify_folder)
             while not mounted:
-                self._check_mountpoint_folder(self.mountpoint)
-                self._attempt_mount()
-                mounted = self._check_mountpoint(os.path.join(self.mountpoint, BLOCK_MOUNT_VERIFICATION_SUBFOLDER))
-                if not mounted:
-                    mount_attempts += 1
-                    if mount_attempts >= MAX_ATTEMPTS:
-                        break
-                    os.sleep(3)
+                mounted = self._attempt_mount()
+                if mounted or not mount_count < MAX_ATTEMPTS:
+                    logger.debug(" - quitting mount loop (mounted: %s, attempts made: %s)" % (mounted, mount_count))
+                    break 
+                mount_count += 1
+                logger.debug(" - sleeping 3 before next mount attempt")
+                time.sleep(3)
         notempty = False
         if mounted:
+            logger.debug(" - mounted, checking if source not empty..")
             notempty = self._is_not_empty()
             self._attempt_umount()
+        else:
+            logger.warn(" - not able to mount the device")
         return notempty
 
     def paths(self):
@@ -98,4 +96,4 @@ class BlockDevice(Source):
         for filepath in self._paths():
             # -- convention is to yield the original filepath and the modified/accessible filepath (if modified)
             yield SourceFile(filepath)
-        self._attempt_umount()
+        #self._attempt_umount()

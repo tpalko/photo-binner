@@ -15,7 +15,7 @@ import json
 #import importlib
 import glob
 from configparser import ConfigParser
-from source import Source, SourceFile, StitchFolder
+from sources.source import StitchFolder, SourceFile
 from exifwrapper import ExifWrapper
 from logescrow import LogEscrow
 from pwd import getpwnam
@@ -37,13 +37,22 @@ future knowledge.
 logger = logging.getLogger(__name__)
 
 config = ConfigParser()
-#config.read('photobinner.cfg')
-user_config = os.path.expanduser('~/.pbrc')
-if os.path.exists(user_config):
+pb_config = os.path.expanduser('~/.pbrc')
+user_config = None 
+STATS_FOLDER = "pb_stats"
+if os.path.isfile(pb_config):
+    user_config = pb_config 
+    logger.info("You know, if ~/.pbrc is a folder, photobinner will store run stats there instead of here")
+elif os.path.isdir(pb_config) and os.path.isfile(os.path.join(pb_config, 'config')):
+    user_config = os.path.join(pb_config, 'config')
+    STATS_FOLDER = os.path.join(pb_config, 'stats')
+    if not os.path.exists(STATS_FOLDER):
+        os.makedirs(STATS_FOLDER)
+if user_config:
     logger.debug("Reading %s" % user_config)
-    config.read(os.path.expanduser('~/.pbrc'))
+    config.read(user_config)
 else:
-    logger.debug("No config, baked-in defaults..")
+    logger.debug("No config, using baked-in defaults..")
 
 # -- EXIF 'image_make' in this list get descriptive text <make>_<model>
 IMAGE_MAKERS = ['Apple']
@@ -61,8 +70,6 @@ LOCAL_EPOCH = UTC_EPOCH.astimezone(TZ)
 DEFAULT_YEARS = [1970, 1980]
 
 STITCH_FILE_MATCH = "^ST[A-Z]_[0-9]+.JPG$"
-
-OUT_FOLDER = '/media/storage/development/github.com/photo-binner/out'
 
 OWNER_UID = os.getuid()
 if 'owner' in config.defaults():
@@ -350,10 +357,10 @@ class PhotoBinner(object):
 
         target_date = None
 
-        for source in [ d for d in date_source_priority if d in target_dates ]:
-            if not target_date or (source == 'filename' or target_dates[source] < target_date):
-                target_date = target_dates[source]
-                target_date_assigned_from = source
+        for date_source in [ d for d in date_source_priority if d in target_dates ]:
+            if not target_date or (date_source == 'filename' or target_dates[date_source] < target_date):
+                target_date = target_dates[date_source]
+                target_date_assigned_from = date_source
 
         self.log_escrow.info(" - target date assigned using %s: %s" % (target_date_assigned_from, datetime.strftime(target_date, "%Y-%m-%d %H:%M:%S %z")))
         self._push_run_stat('date_sources', target_date_assigned_from, sourcefile.original_path)
@@ -440,17 +447,19 @@ class PhotoBinner(object):
 
         return (target_folder, move_necessary, )
 
-    def _calculate_target_folder(self, target_date, descriptive):
+    def _calculate_target_folder(self, source, target_date, descriptive):
         # -- deriving working values
         year_string = datetime.strftime(target_date, "%Y")
         date_string = datetime.strftime(target_date, "%Y-%m-%d")
-
+        
+        self.log_escrow.info(" - calculating target folder for source target: %s" % source.target)
+        
         if self.filing_preference == 'label' and descriptive:
-            return os.path.join(self.target_base_folder, year_string, descriptive, date_string)
+            return os.path.join(source.target, year_string, descriptive, date_string)
         elif descriptive:
-            return os.path.join(self.target_base_folder, year_string, "%s_%s" %(date_string, descriptive))
+            return os.path.join(source.target, year_string, "%s_%s" %(date_string, descriptive))
         else:
-            return os.path.join(self.target_base_folder, year_string, date_string)
+            return os.path.join(source.target, year_string, date_string)
 
     def _process_stitch_folder(self, source, stitch_folder):
         self.log_escrow.info("Processing stitch folder: %s" % stitch_folder.working_path)
@@ -464,7 +473,7 @@ class PhotoBinner(object):
             stitch_folder_name = stitch_folder.working_path.rpartition('/')[-1]
             exclude_descriptive = source.exclude_descriptive.append(stitch_folder_name)
             descriptive = self._extract_descriptive(stitch_file_source_file, source.mountpoint, exclude_descriptive)
-            target_folder = self._calculate_target_folder(target_date, descriptive)
+            target_folder = self._calculate_target_folder(source, target_date, descriptive)
             (target_folder, move_necessary,) = self._determine_move_action(stitch_folder, target_folder, stitch_folder_name)
             new_path = os.path.join(target_folder, stitch_folder_name)
             if move_necessary:
@@ -499,7 +508,7 @@ class PhotoBinner(object):
         if new_filename:
             filename = new_filename
 
-        target_folder = self._calculate_target_folder(target_date, descriptive)
+        target_folder = self._calculate_target_folder(source, target_date, descriptive)
         (target_folder, move_necessary,) = self._determine_move_action(sourcefile, target_folder, filename)
         new_path = os.path.join(target_folder, filename)
 
@@ -572,7 +581,8 @@ class PhotoBinner(object):
                     type='Folder',
                     mountpoint=mountpoint,
                     transfer_method=self.move,
-                    exclude_descriptive=self.exclude_descriptive.split(',')
+                    exclude_descriptive=self.exclude_descriptive.split(','),
+                    target=self.target_base_folder
                 )
                 self.attempt_sources[mountpoint] = source_folder
         else:
@@ -583,13 +593,14 @@ class PhotoBinner(object):
 
     def _load_configured_sources(self):
 
-        self.log_escrow.info("Finding sources..")
+        self.log_escrow.debug("Finding sources..")
 
         if self.mask != DEFAULT_MASK:
-            self.log_escrow.info("Filtering all sources by '%s'" % self.mask)
+            self.log_escrow.warn("Filtering all sources by '%s'" % self.mask)
 
         # -- load configured source types
         for section_name in [ s for s in config.sections() if s.startswith('Source-') ]:
+            self.log_escrow.debug(f'{section_name}..')
             source_config = dict(config.items(section_name))
             source_name = section_name.rpartition('-')[-1]
             source_type = source_config['type']
@@ -603,22 +614,29 @@ class PhotoBinner(object):
             source_config['mask'] = self.mask
             source_config['from_date'] = self.from_date
             source_config['name'] = source_name
+            if 'target' not in source_config:
+                self.log_escrow.debug(" - target not defined, setting: %s" % (self.target_base_folder))
+                source_config['target'] = self.target_base_folder
+            else:
+                self.log_escrow.debug(" - target defined: %s" % source_config['target'])
+            
+            # -- default instantiates a 'type' source with kwargs from the ini k/v
             self.aux_sources[source_name] = self.source_types[source_type](**source_config)
 
         self.log_escrow.info("%s source configurations found: [%s]" % (len(list(self.aux_sources.keys())), ",".join([ s for s in list(self.aux_sources.keys()) ])))
 
     def _load_source_types(self):
-        self.log_escrow.info("Finding source implementations..")
+        self.log_escrow.debug("Loading source interfaces..")
         # from sources import android
         # self.source_types['Android'] = android.classdef()
         mod = __import__("sources")
-        for source in mod.sources.sources():
-            self.log_escrow.info("Loading module: %s" % source)
+        for source in mod.sources():
+            self.log_escrow.debug("Loading module: %s" % source)
             source_class = source.classdef()
             source_name = source_class().__class__.__name__
             self.source_types[source_name] = source_class
-            Source.register(source_class)
-        self.log_escrow.info("%s source types configured: [%s]" % (len(list(self.source_types.keys())), ",".join([ s for s in list(self.source_types.keys()) ])))
+            #Source.register(source_class)
+        self.log_escrow.info("%s source interfaces configured: [%s]" % (len(list(self.source_types.keys())), ",".join([ s for s in list(self.source_types.keys()) ])))
 
     def _get_json_content(self, filepath):
         j = None
@@ -627,31 +645,35 @@ class PhotoBinner(object):
             try:
                 j = json.loads(filepath_contents)
             except:
-                pass
+                logger.warning(" - failed to load %s as JSON" % filepath)
         return j
 
     def _load_session(self):
         open_sessions = []
 
+        logger.info("Gathering open sessions..")
         # -- gather up all the open sessions
-        for outfile in [ g for g in glob.glob(os.path.join(OUT_FOLDER, "*")) if re.search("photobinner\_[0-9]{8}\_[0-9]{6}%s\_[A-Za-z0-9]+\.out$" % ('_dry_run' if self.dry_run else ''), g) ]:
-            logger.info("Examining outfile: %s" % outfile)
+        for outfile in [ g for g in glob.glob(os.path.join(STATS_FOLDER, "*")) if re.search("photobinner\_[0-9]{8}\_[0-9]{6}%s\_[A-Za-z0-9]+\.out$" % ('_dry_run' if self.dry_run else ''), g) ]:
             j = self._get_json_content(outfile)
             if j and 'meta' in j and 'status' in j['meta'] and j['meta']['status'] == 'open':
+                logger.info(" - %s (open)" % outfile)
                 open_sessions.append(outfile)
+            else:
+                logger.info(" - %s (not open)" % outfile)
 
         # -- TODO: menu to choose a session
         session_choice = None
         if len(open_sessions) > 0:
-            logger.warn("Please choose a session:")
+            logger.warning("Please choose a session:")
         else:
-            logger.warn("Please choose:")
+            logger.warning("Please choose:")
         while not (session_choice and (session_choice.lower() in ['n','s','q'] or (session_choice.isdigit() and int(session_choice)-1 in range(len(open_sessions))))):
             for s in range(len(open_sessions)):
                 print(("(%s) %s" % ((s+1), open_sessions[s])))
             print("(n)ew session")
             print("(s)kip session")
             print("(q)uit")
+            print("? ")
             session_choice = input()
 
         if session_choice.isdigit():
@@ -660,7 +682,7 @@ class PhotoBinner(object):
             self.run_stats = self._get_json_content(self.sessionfile)
             self.run_stats['meta']['dry_run'] = self.run_stats['meta']['dry_run'] == 'true'
             if self.run_stats['meta']['dry_run'] != self.dry_run:
-                self.log_escrow.warn("The selected session is%s a dry run, however the program was called with%s the dry run flag. Forcing the flag to match the file." % (' not' if not self.dry_run else '', 'out' if not self.dry_run else ''))
+                self.log_escrow.warn("The selected session is%s a dry run, however the program was called with%s the dry run flag. Forcing the flag to match the file." % (' not' if not self.run_stats['meta']['dry_run'] else '', 'out' if not self.dry_run else ''))
                 self.dry_run = self.run_stats['meta']['dry_run'] == 'true'
         elif session_choice.lower() == 's':
             self.run_stats['meta']['dry_run'] = 'true' if self.dry_run else 'false'
@@ -675,7 +697,7 @@ class PhotoBinner(object):
                     good_name = session_name.replace(' ', '').lower()
             timestamp = datetime.strftime(datetime.now(), "%Y%m%d_%H%M%S")
             outfile_name = "photobinner_%s%s%s.out" % (timestamp, ('_dry_run' if self.dry_run else ''), "_%s" % good_name if good_name else "_unnamed")
-            self.sessionfile = os.path.join(OUT_FOLDER, outfile_name)
+            self.sessionfile = os.path.join(STATS_FOLDER, outfile_name)
             self.log_escrow.warn("Starting a new session file: %s" % self.sessionfile)
             self.run_stats['meta']['dry_run'] = 'true' if self.dry_run else 'false'
             with open(self.sessionfile, 'w') as s:
@@ -701,12 +723,16 @@ class PhotoBinner(object):
             logger.debug("No provided source could be verified")
             exit(1)
 
-        if not os.path.exists(OUT_FOLDER):
-            logger.info("Creating out folder: %s" % OUT_FOLDER)
-            os.makedirs(OUT_FOLDER)
-            os.chown(OUT_FOLDER, OWNER_UID, -1)
+        if not os.path.exists(STATS_FOLDER):
+            logger.info("Creating out folder: %s" % STATS_FOLDER)
+            os.makedirs(STATS_FOLDER)
+            os.chown(STATS_FOLDER, OWNER_UID, -1)
         else:
-            logger.info("Out folder found: %s" % OUT_FOLDER)
+            logger.info("Out folder found: %s" % STATS_FOLDER)
+        
+        if not os.path.exists(self.exact_matches_folder):
+            os.makedirs(self.exact_matches_folder)
+            os.chown(self.exact_matches_folder, OWNER_UID, -1)
 
         self._load_session()
 
@@ -734,10 +760,6 @@ class PhotoBinner(object):
         return handler
 
     def run(self):
-
-        if not os.path.exists(self.exact_matches_folder):
-            os.makedirs(self.exact_matches_folder)
-            os.chown(self.exact_matches_folder, OWNER_UID, -1)
 
         for s in list(self.verified_sources.keys()):
             source = self.verified_sources[s]
@@ -804,7 +826,7 @@ class PhotoBinner(object):
         updated_session = json.dumps(self.run_stats, indent=4, sort_keys=True)
 
         if self.session:
-            with open(self.sessionfile, 'wb') as f:
+            with open(self.sessionfile, 'w') as f:
                 f.write(updated_session)
 
             os.chown(self.sessionfile, OWNER_UID, -1)
@@ -857,14 +879,14 @@ def main(user_source, target, mask, from_date, preserve_folders, exclude_descrip
 
     pb = PhotoBinner(**cfg)
 
-    if not setup_only:
-        logger.fatal("Continue? y/N")
-        cont = input()
+    if setup_only:
+        exit(0)
+    
+    cont = input("Continue? y/N ")
+    if str(cont) != 'y':
+        exit(0)
 
-        if str(cont) != 'y':
-            exit(0)
-
-        pb.run()
+    pb.run()
 
 if __name__ == "__main__":
     main()

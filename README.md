@@ -53,6 +53,10 @@ curating process is a priority for you, read on.
 Your Android smartphone can be accessed by `photobinner` from your Linux computer using
 `adb`, the Android Debug Bridge. For Android 4.2.2 and up, this access will require an RSA keypair.
 
+Also, when choosing the USB connection type, choose "Transfer Files (MTP)". "Transfer Files" without 
+a this protocol designation may result in the connection being dropped randomly, generating a misleading 
+'Nonetype has no attribute ReadUntilClose'.
+
 The Python module `adb` is available through PyPi. If you want the command-line
 `adb` tool, this is available with the `adb` package, at least on Debian Stretch. Installing
 `adb` will also give you `android-sdk-platform-tools-common`, which contains the udev
@@ -173,3 +177,5 @@ how the session file is parsed when selected and that all sources are accounted 
 - python 3!
 - add 'session name' parameter to metadata
 - session filename timestamp in metadata
+
+## 
