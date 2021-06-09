@@ -3,3 +3,5 @@ output.txt
 *.pyc
 doc
 build
+*.egg-info
+dist

@@ -2,12 +2,9 @@ import os
 import sys
 import subprocess
 import logging
-from sources.source import Source, SourceFile, StitchFolder
+from photobinner.sources.source import Source, SourceFile, StitchFolder
 
 logger = logging.getLogger(__name__)
-
-def classdef():
-    return Folder
 
 class Folder(Source):
 

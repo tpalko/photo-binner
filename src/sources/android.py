@@ -3,7 +3,7 @@ import sys
 import subprocess
 import logging
 from datetime import datetime
-from sources.source import Source, SourceFile
+from photobinner.sources.source import Source, SourceFile
 import traceback
 from adb_shell.adb_device import AdbDeviceTcp, AdbDeviceUsb
 from adb_shell.auth.sign_pythonrsa import PythonRSASigner
@@ -25,8 +25,6 @@ from adb_shell.exceptions import AdbConnectionError, UsbDeviceNotFoundError, Tcp
 adb_shell_logger = logging.getLogger('adb_shell')
 adb_shell_logger.setLevel(logging._nameToLevel['INFO'])
 logger = logging.getLogger('Android')
-def classdef():
-    return Android
 
 class Android(Source):
 

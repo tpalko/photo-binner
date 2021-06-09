@@ -3,13 +3,10 @@ import time
 import sys
 import subprocess
 import logging
-from sources.source import Source, SourceFile
+from photobinner.sources.source import Source, SourceFile
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
-
-def classdef():
-    return BlockDevice
 
 BLOCK_MOUNT_VERIFICATION_SUBFOLDER = "DCIM"
 

@@ -3,7 +3,7 @@
 import os
 import sys
 import signal
-from  datetime import datetime, timedelta
+from datetime import datetime, timedelta
 from pytz import timezone
 import click
 import logging
@@ -15,12 +15,14 @@ import json
 #import importlib
 import glob
 from configparser import ConfigParser
-from sources.source import StitchFolder, SourceFile
-from exifwrapper import ExifWrapper
-from logescrow import LogEscrow
 from pwd import getpwnam
 import traceback
 #from grp import getgrnam
+print(sys.path)
+from photobinner.sources.source import StitchFolder, SourceFile
+from photobinner.exifwrapper import ExifWrapper
+from photobinner.logescrow import LogEscrow
+
 
 '''
 If debug, show file heading and any indented debug lines for all files
@@ -602,18 +604,20 @@ class PhotoBinner(object):
         for section_name in [ s for s in config.sections() if s.startswith('Source-') ]:
             self.log_escrow.debug(f'{section_name}..')
             source_config = dict(config.items(section_name))
-            source_name = section_name.rpartition('-')[-1]
             source_type = source_config['type']
             if source_type not in self.source_types:
                 self.log_escrow.warn("Configured source with type '%s' is not represented by a Source implementation" % source_type)
                 continue
             if 'exclude_descriptive' in source_config:
                 source_config['exclude_descriptive'] = source_config['exclude_descriptive'].split(',')
+            source_name = section_name.rpartition('-')[-1]
+            source_config['name'] = source_name
+            # -- convert string value transfer method to function handle 
             # -- transfer method defaults to 'copy' unless stated 'move'
             source_config['transfer_method'] = self.move if 'transfer_method' in source_config and source_config['transfer_method'] == 'move' else self.copy
+            # -- pulling in invocation-time parameters 
             source_config['mask'] = self.mask
             source_config['from_date'] = self.from_date
-            source_config['name'] = source_name
             if 'target' not in source_config:
                 self.log_escrow.debug(" - target not defined, setting: %s" % (self.target_base_folder))
                 source_config['target'] = self.target_base_folder
@@ -629,12 +633,11 @@ class PhotoBinner(object):
         self.log_escrow.debug("Loading source interfaces..")
         # from sources import android
         # self.source_types['Android'] = android.classdef()
-        mod = __import__("sources")
-        for source in mod.sources():
-            self.log_escrow.debug("Loading module: %s" % source)
-            source_class = source.classdef()
-            source_name = source_class().__class__.__name__
-            self.source_types[source_name] = source_class
+        #mod = __import__("photobinner.sources")
+        from photobinner.sources import sources 
+        for source_class in sources():
+            self.log_escrow.debug("Loading module: %s" % source_class)
+            self.source_types[source_class().__class__.__name__] = source_class
             #Source.register(source_class)
         self.log_escrow.info("%s source interfaces configured: [%s]" % (len(list(self.source_types.keys())), ",".join([ s for s in list(self.source_types.keys()) ])))
 
@@ -771,7 +774,7 @@ class PhotoBinner(object):
             run_stat = { 'source': s, 'start': datetime.strftime(datetime.now(), "%Y-%m-%dT%H:%M:%S"), 'file_count': 0 }
             try:
                 if source.mountpoint and os.path.isfile(source.mountpoint):
-                    self.log_escrow.info("Processing %s " % source.mountpoint)
+                    self.log_escrow.info("Processing single file %s " % source.mountpoint)
                     try:
                         sourcefile = SourceFile(source.mountpoint)
                         self._process_file(source=source, sourcefile=sourcefile)
