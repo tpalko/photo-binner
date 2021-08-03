@@ -3,7 +3,7 @@ import time
 import sys
 import subprocess
 import logging
-from photobinner.sources.source import Source, SourceFile
+from plugin.source import Source, SourceFile
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
