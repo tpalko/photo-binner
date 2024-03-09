@@ -1,6 +1,7 @@
 import re
 import logging 
 import glob
+from datetime import datetime
 import os
 import json
 
@@ -84,6 +85,8 @@ class PhotoStats(object):
             print("(q)uit")
             print("? ")
             session_choice = input()
+        
+        self._init_run_stats(dry_run)
 
         if session_choice.isdigit():
             self.sessionfile = open_sessions[int(session_choice)-1]
@@ -115,13 +118,21 @@ class PhotoStats(object):
             else:
                 logger.info("Out folder found: %s" % stats_folder)
                 
-            self._init_run_stats(dry_run)
+            
             self.run_stats['meta']['dry_run'] = 'true' if dry_run else 'false'
             with open(self.sessionfile, 'w') as s:
                 s.write(json.dumps(self.run_stats))
         else: # session_choice.lower() == 'q':
             exit(0)
     
+    def is_source_file_processed(self, source, filename):
+        return source in self.run_stats['processed_files'] and filename in self.run_stats['processed_files'][source]
+    
+    def append_processed_file(self, source, filename):
+        if source not in self.run_stats['processed_files']:
+            self.run_stats['processed_files'][source] = []
+        self.run_stats['processed_files'][source].append(filename)
+
     def get_session_processed_files(self):
         return self.run_stats['processed_files']
     

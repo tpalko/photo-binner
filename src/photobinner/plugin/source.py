@@ -54,6 +54,7 @@ class Source():
         self.logger = logging.getLogger(__name__)
         for k in kwargs:
             val = kwargs[k]
+	    # -- this is a list-as-string we should parse 
             if type(kwargs[k]) == str and kwargs[k].count(",") > 0:
                 val = kwargs[k].split(',')
             self.__setattr__(k, val)
@@ -118,9 +119,9 @@ class Source():
             image_files = self._filter(filenames)
             for filename in image_files:
                 filepath = os.path.join(current_folder, filename)
-                if self._is_processed(filepath):
-                    self.logger.info(" - %s found as processed, skipping.." % filepath)
-                    continue
+                # if self._is_processed(filepath):
+                #     self.logger.info(" - %s found as processed, skipping.." % filepath)
+                #     continue
                 yield filepath
 
     def _stitch_folders(self):

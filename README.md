@@ -156,6 +156,30 @@ how the session file is parsed when selected and that all sources are accounted 
 - '001' added to exclude_descriptive command line parameter doesn't remove this from descriptive text
 - history tracking to avoid re-copying the same file does not account for device-assigned file number rollover IMG_9999.JPG, IMG_0000.JPG, ..
 - detection of "double timezoning" may be generating false positives
+- this:
+  ```
+  -rw-rw---- 1 root sdcard_rw 13305370 2020-10-13 04:54 f139b1cb97f369de80e06eb667262a6b.mp4
+
+  angler:/mnt/sdcard/DCIM/Camera $ stat f139b1cb97f369de80e06eb667262a6b.mp4                                                                                                                                                                                                    
+    File: `f139b1cb97f369de80e06eb667262a6b.mp4'
+    Size: 13305370	 Blocks: 26000	 IO Blocks: 512	regular file
+  Device: 13h/19d	 Inode: 679049	 Links: 1
+  Access: (660/-rw-rw----)	Uid: (    0/    root)	Gid: ( 1015/sdcard_rw)
+  Access: 2020-10-13 04:54:08.536851340
+  Modify: 2020-10-13 04:54:08.630184683
+  Change: 2020-10-13 04:54:08.630184683
+  angler:/mnt/sdcard/DCIM/Camera $ 
+
+  tpalko@frankendeb:/media/tpalko/AQUAPINK/DCIM/100MEDIA $ stat $(find /media/storage/pics -name "f139b1cb97f369de80e06eb667262a6b.mp4")
+    File: /media/storage/pics/2020/2020-10-18/f139b1cb97f369de80e06eb667262a6b.mp4
+    Size: 13305370  	Blocks: 25992      IO Block: 4096   regular file
+  Device: fe03h/65027d	Inode: 47986293    Links: 1
+  Access: (0644/-rw-r--r--)  Uid: ( 1000/  tpalko)   Gid: (    0/    root)
+  Access: 2020-10-22 01:34:57.122827976 -0400
+  Modify: 2020-10-18 19:01:26.805774927 -0400
+  Change: 2020-10-18 19:01:26.833774907 -0400
+   Birth: -
+  ```
 
 ## Verify Complete
 
@@ -163,6 +187,30 @@ how the session file is parsed when selected and that all sources are accounted 
 
 ## Future Work
 
+### Current 
+- Pixel image naming is in the format PXL_YYYYMMDD_HHMMSSSSS.jpg in UTC. The program currently will catch this and rename files
+replacing the nine-digit time with the six-digit "HHMMSS" in local time. This may be more accurate, but is not always (pictures
+taken in different timezones, and location may be embedded in the image) and so this step is at best unnecessary and at worst 
+maligning the metadata.
+- Giving the user control over sessions management leads to disorganization and bad data. The schema already allows for multiple sources,
+so this granular accessibility of sessions is unnecessary. Opaque handling of this information is preferred. The use cases should be 
+reviewed for a better workflow.
+- Pixel image naming also includes renaming files as .trashed-[UTC expiration timestamp]-[original filename] when deleted. These are copied 
+and processed along with regular (non-deleted) files, though Gwenview (at least) does not display them they are still present.
+- Logging is way messy. Utility logging could be kept separately (/var/log) from user logging. A useful wrapper would dynamically set user-given
+log level and up (in severity) as user logging and anything less severe (or maybe all logging irrespective of log level) as system logging (/var/log).
+At least, the [LEVEL:FILE] prefix should not be shown to the user.
+- Local/development installation and distribution packaging should be properly implemented.
+- The Android interface is broken.. if the ADB connection cannot be made more automatic out-of-band, at least the server restart/TCPIP binding can be properly 
+coded into the program with the existing 3rd party adb module.
+- The UUID identifier changes with formatting. If it's possible to identify sources without this? Also instead of declaring the source type, is it possible to
+calculate this on the fly?
+- Refactor the program to act as a pipeline and be able to include or exclude specific steps and actions more transparently. Compiling files to be copied,
+ensuring they have not already been processed, handling duplicates, gathering other metadata, checking timestamps, copying or moving, deleting from source, etc.
+- Avoid pulling files to /tmp and then copying and fixing timestamps anyway. The purpose of this was to make processing easier (bash native), but 
+pulling directly to the target folder is preferred if this processing can be done on the device.
+
+### Pre-August 2021
 - broader deduplication
   - incorporate light database to index hash sums for more thorough duplicate identification
   - provide duplicate finding as a primary operation
@@ -178,4 +226,11 @@ how the session file is parsed when selected and that all sources are accounted 
 - add 'session name' parameter to metadata
 - session filename timestamp in metadata
 
-## 
+### 10/31/21 
+multiplex source/dest - across devices?
+classify sources (a folder on a phone, a file type on an sd card, combinations or collections) with filters, regex, file extensions, names 
+set sources to destinations (a folder)
+construct pipeline.. date fixing, classification folders
+
+### 7/25/22
+- command to show source options - generally inventory and improve on command options, visibility, situational awareness 

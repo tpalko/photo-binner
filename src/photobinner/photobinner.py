@@ -16,7 +16,7 @@ from configparser import ConfigParser
 from pwd import getpwnam
 import traceback
 #from grp import getgrnam
-print(sys.path)
+# print(sys.path)
 from plugin.source import StitchFolder, SourceFile
 from utils.dates import get_target_date
 from utils.stats import PhotoStats
@@ -203,7 +203,7 @@ class PhotoBinner(object):
         # - implies that outside the file change block, logs must be < WARN
         logger.info("Processing %s.." % sourcefile.original_path)
 
-        (target_date, target_atime, target_mtime, new_filename, target_date_assigned_from,) = get_target_date(sourcefile, self.stats.push_run_stat)
+        (target_date, target_atime, target_mtime, new_filename, target_date_assigned_from,) = get_target_date(sourcefile.working_path, sourcefile.original_path, self.stats.push_run_stat)
 
         if not target_date:
             logger.warn(" - no target date could be calculated")
@@ -284,7 +284,7 @@ class PhotoBinner(object):
                 source_folder = self.source_types['Folder'](
                     type='Folder',
                     mountpoint=mountpoint,
-                    transfer_method=self.transfer_method,
+                    transfer_method=self.move if self.transfer_method == 'move' else self.copy,
                     exclude_descriptive=self.exclude_descriptive.split(','),
                     target=self.target_base_folder
                 )
@@ -354,7 +354,7 @@ class PhotoBinner(object):
 
         if len(list(self.verified_sources.keys())) == 0:
             logger.debug("No provided source could be verified")
-            exit(1)
+            exit(0)
         
         if not os.path.exists(self.exact_matches_folder):
             os.makedirs(self.exact_matches_folder)
@@ -409,6 +409,7 @@ class PhotoBinner(object):
                         sourcefile = SourceFile(source.mountpoint)
                         self._process_file(source=source, sourcefile=sourcefile)
                         run_stat['file_count'] += 1
+                        self.stats.append_processed_file(s, sourcefile.original_path)
                         source.processed_files.append(source.mountpoint)
                     except:
                         logger.error("Exception caught processing file: %s" % source.mountpoint)
@@ -424,8 +425,12 @@ class PhotoBinner(object):
                             if isinstance(sf, StitchFolder):
                                 self._process_stitch_folder(source=source, stitch_folder=sf)
                             else:
+                                if self.stats.is_source_file_processed(s, sf.original_path):
+                                    logger.info(" - [%s] %s found as processed, skipping.." % (s, sf.original_path))
+                                    continue 
                                 self._process_file(source=source, sourcefile=sf)
                                 run_stat['file_count'] += 1
+                                self.stats.append_processed_file(s, sf.original_path)
                                 source.processed_files.append(sf.original_path)
                                 if count > 0:
                                     count -= 1
@@ -448,9 +453,9 @@ class PhotoBinner(object):
             run_stat['stop'] = datetime.strftime(datetime.now(), "%Y-%m-%dT%H:%M:%S")            
             self.stats.append_run_stat(run_stat)
 
-        logger.info("Capturing processed files from sources..")
-        for s in list(self.verified_sources.keys()):
-            self.stats.set_session_processed_files(s, self.verified_sources[s].processed_files)            
+        # logger.info("Capturing processed files from sources..")
+        # for s in list(self.verified_sources.keys()):
+        #     self.stats.set_session_processed_files(s, self.verified_sources[s].processed_files)            
 
         self.stats.write_out()
 

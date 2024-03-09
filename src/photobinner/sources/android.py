@@ -1,5 +1,10 @@
 import os
 import sys
+
+# print(os.path.realpath(__file__))
+# print(sys.path)
+sys.path.append(os.path.join(os.path.realpath(os.path.dirname(__file__)), '..'))
+
 import subprocess
 import logging
 from datetime import datetime
@@ -38,47 +43,58 @@ class Android(Source):
     
     def _get_device(self):
         if not self.device:
+            logger.info("Reading ADB key at %s" % self.adb_key_path)
+            with open(self.adb_key_path) as f:
+                priv = f.read()
+            with open(self.adb_key_path + '.pub') as f:
+                pub = f.read()
+            signer = PythonRSASigner(pub, priv)
+            
             try:     
-                logger.info("Reading ADB key at %s" % self.adb_key_path)
-                with open(self.adb_key_path) as f:
-                    priv = f.read()
-                signer = PythonRSASigner('', priv)
-                
-                logger.info("Attempting TCP device connection at %s.." % self.ip_address)
-                try:
-                    self.device = AdbDeviceTcp(self.ip_address, 5037, default_transport_timeout_s=30.)
-                    #print("AdbDeviceTcp..")
-                    print(dir(self.device))
-                    logger.info("available..")
-                    print(self.device.available)
-                    logger.info("close..")
-                    self.device.close()
-                    logger.info("available..")
-                    print(self.device.available)
-                    logger.info("connect..")
-                    self.device.connect(rsa_keys=[signer], auth_timeout_s=30.0)
-                except ConnectionRefusedError as cre:
-                    logger.error("Connection Refused")
-                    logger.error(cre)
-                    # logger.error(sys.exc_info()[1])
-                except TcpTimeoutException as tte:
-                    logger.error("TCP Timeout")
-                    logger.error(tte)
-                except:
-                    logger.error("Failed TCP connection..")
-                    logger.error(sys.exc_info()[0])
-                    logger.error(sys.exc_info()[1])
+                if self.ip_address:
+                    logger.info(f'Found IP address configured for this device: {self.ip_address}')
+                    logger.info("Attempting TCP device connection at %s.." % self.ip_address)
+                    try:
+                        self.device = AdbDeviceTcp(self.ip_address, 5037, default_transport_timeout_s=9.0)
+                        # print("AdbDeviceTcp..")
+                        # print(dir(self.device))
+                        # logger.info("available..")
+                        # print(self.device.available)
+                        # logger.info("close..")
+                        # self.device.close()
+                        # logger.info("available..")
+                        # print(self.device.available)
+                        # logger.info("connect..")
+                        self.device.connect(rsa_keys=[signer], auth_timeout_s=5.0)
+                    except ConnectionRefusedError as cre:
+                        logger.error("Connection Refused")
+                        logger.error(cre)
+                        logger.error(sys.exc_info()[1])
+                    except TcpTimeoutException as tte:
+                        logger.error("TCP Timeout")
+                        logger.error(tte)
+                    except:
+                        logger.error("Failed TCP connection..")
+                        logger.error(sys.exc_info()[0])
+                        logger.error(sys.exc_info()[1])
+                else:
+                    logger.warn(f'No IP address configured for this device')
                 
                 if not self.device or not self.device.available:
-                    print("Attempting USB connection..")
+                    print(f'Attempting USB connection.. (device={self.device}, available={self.device.available if self.device else "n/a"})')
                     try:
                         self.device = AdbDeviceUsb()
-                        #print("AdbDeviceUsb..")
-                        #print(dir(self.device))
-                        logger.info("close..")
-                        self.device.close()
-                        logger.info("connect..")
-                        self.device.connect(rsa_keys=[signer])
+                        print("AdbDeviceUsb..")
+                        if self.device:
+                            print(dir(self.device))
+                            # print(self.device.pull('/tmp', '/tmp'))
+                            #logger.info("close..")
+                            #self.device.close()
+                            # logger.info("connect..")
+                            self.device.connect(rsa_keys=[signer])
+                        else:
+                            print("No device object")
+                        
                     except UsbDeviceNotFoundError as udnfe:
                         logger.error(udnfe)
                     except: # usb1.USBErrorBusy as b:
@@ -106,6 +122,7 @@ class Android(Source):
     
     def test(self):
         device = self._get_device()
+        return device
 
     def verify(self):                
         device = self._get_device()
@@ -175,8 +192,10 @@ class Android(Source):
 
 if __name__ == "__main__":
     config = {
-        'ip_address': '192.168.1.79',
+        'ip_address': '192.168.1.25',
         'adb_key_path': '/home/debian/tpalko/.android/adbkey'
     }
     a = Android(**config)
-    a.test()
+    device = a.test()
+    device.shell('ls')
+   

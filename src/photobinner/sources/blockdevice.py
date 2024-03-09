@@ -20,7 +20,7 @@ class BlockDevice(Source):
             logger.debug(" - creating %s" % self.mountpoint)
             os.makedirs(self.mountpoint)
         ps_mount = subprocess.Popen(['mount', 'UUID=%s' % self.uuid, self.mountpoint])
-        logger.info("Attempting to mount device..")
+        logger.info("Attempting to mount device at %s.." % self.mountpoint)
         (mountout, mounterr) = ps_mount.communicate(None)
         if mounterr:
             logger.error(mounterr)
@@ -42,6 +42,10 @@ class BlockDevice(Source):
     def _check_attached_device(self):
         uuid = None
         try:
+            # -- we have the block device label, with which we may want to verify a UUID association
+            # -- however UUID doesn't survive an SD card format 
+            # -- the device label really needs to be unique
+            #ps_grep_uuid = subprocess.Popen('blkid | grep %s')
             ps_blkid = subprocess.Popen(['blkid'], stdout=subprocess.PIPE)
             ps_grepblkid = subprocess.Popen(['grep', self.block_label], stdin=ps_blkid.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             (blkout, blkerr) = ps_grepblkid.communicate(None)

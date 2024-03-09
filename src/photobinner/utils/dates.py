@@ -1,5 +1,5 @@
 import os
-from datetime import datetime 
+from datetime import datetime, timedelta
 import re 
 import logging 
 from pytz import timezone
@@ -14,8 +14,8 @@ UTC_EPOCH = UTC.localize(EPOCH)
 LOCAL_EPOCH = UTC_EPOCH.astimezone(TZ)
 DEFAULT_YEARS = [1970, 1980]
 
-def _extract_date_from_path(sourcefile):
-    path = sourcefile.original_path.rpartition('/')[0]
+def _extract_date_from_path(filepath):
+    path = filepath.rpartition('/')[0]
     date_matches = []
     date_matches.extend([ datetime.strptime(m, '%Y_%m_%d') for m in re.findall('[0-9]{4}_{1}[0-9]{2}_{1}[0-9]{2}', path) ])
     date_matches.extend([ datetime.strptime(m, '%Y-%m-%d') for m in re.findall('[0-9]{4}-{1}[0-9]{2}-{1}[0-9]{2}', path) ])
@@ -23,9 +23,9 @@ def _extract_date_from_path(sourcefile):
     logger.debug(" - dates from path: %s" % [ datetime.strftime(d, "%Y-%m-%d %H:%M:%S %z") for d in date_matches ])
     return TZ.localize(date_matches[0]) if len(date_matches) > 0 else None
 
-def _extract_date_from_filename(sourcefile):
-    logger.debug(" - trying to match timestamp from filename: %s" % sourcefile.original_path)
-    match = re.search('[0-9]{8}[\_-]{1}[0-9]{6}', sourcefile.original_path)
+def _extract_date_from_filename(filepath):
+    logger.debug(" - trying to match timestamp from filename: %s" % filepath)
+    match = re.search('[0-9]{8}[\_-]{1}[0-9]{6}', filepath)
     filename_date = None
     if match:
         logger.debug(" - filename timestamp: %s" % match.group())
@@ -48,9 +48,20 @@ def _date_match(d1, d2):
 def _is_day_only(d):
     return d.hour == 0 and d.minute == 0 and d.second == 0
 
-def get_target_date(sourcefile, run_stat_callback):
+def get_target_date(working_path, original_path=None, run_stat_callback=None):
+    '''
+    1. get file stats 
+    2. get localized file mtime -> target_date_from_stat 
+    3. get file atime / mtime -> target_atime / target_mtime 
+    4. extract date from filename -> target_date_from_filename
+    5. extract date from path -> target_date_from_path
+    6. get image metadata datetime -> target_date_from_exif
+    '''
 
-    file_stats = os.stat(sourcefile.working_path)
+    if not original_path:
+        original_path = working_path
+
+    file_stats = os.stat(working_path)
     # -- this assumed file was read as UTC, which is was not
     #target_date = UTC.localize(datetime.fromtimestamp(file_stats.st_mtime)).astimezone(TZ)
     # -- call file stats in local time
@@ -58,11 +69,11 @@ def get_target_date(sourcefile, run_stat_callback):
     target_atime = file_stats.st_atime
     target_mtime = file_stats.st_mtime
 
-    target_date_from_filename = _extract_date_from_filename(sourcefile)
+    target_date_from_filename = _extract_date_from_filename(original_path)
 
-    target_date_from_path = _extract_date_from_path(sourcefile)
+    target_date_from_path = _extract_date_from_path(original_path)
 
-    ew = ExifWrapper(filepath=sourcefile.working_path)
+    ew = ExifWrapper(filepath=working_path)
     target_date_from_exif = ew.image_datetime()
 
     # - in images from iphone backups, the timestamp of the file itself is accurate
@@ -84,7 +95,8 @@ def get_target_date(sourcefile, run_stat_callback):
         # - basically add back (once) the hours of the local offset - it was offset twice
         target_date_from_stat = target_date_from_stat + timedelta(hours=-target_date_from_stat.utcoffset().total_seconds()/(60*60))
         target_mtime = (target_date_from_stat - LOCAL_EPOCH).total_seconds()
-        run_stat_callback('anomalies', 'file-date-double-timezoned', sourcefile.original_path)
+        if run_stat_callback:
+            run_stat_callback('anomalies', 'file-date-double-timezoned', original_path)
 
     target_dates = {
         'stat': target_date_from_stat,
@@ -115,7 +127,8 @@ def get_target_date(sourcefile, run_stat_callback):
     # -- if metadata is more recent, it suggests iPhone
     if target_date_from_exif and target_date_from_stat and (target_date_from_exif - target_date_from_stat).total_seconds() > 1:
         logger.warn(" - exif (%s) is newer than stat (%s) - iPhone?" % (datetime.strftime(target_date_from_exif, "%Y-%m-%d %H:%M:%S %z"), datetime.strftime(target_date_from_stat, "%Y-%m-%d %H:%M:%S %z")))
-        run_stat_callback('anomalies', 'recent-exif', sourcefile.original_path)
+        if run_stat_callback:
+            run_stat_callback('anomalies', 'recent-exif', original_path)
 
     # -- order to assign dates (highest priority is last!)
     date_source_priority = ['stat', 'path', 'filename', 'exif']
@@ -128,11 +141,13 @@ def get_target_date(sourcefile, run_stat_callback):
             target_date_assigned_from = date_source
 
     logger.info(" - target date assigned using %s: %s" % (target_date_assigned_from, datetime.strftime(target_date, "%Y-%m-%d %H:%M:%S %z")))
-    run_stat_callback('date_sources', target_date_assigned_from, sourcefile.original_path)
+    if run_stat_callback:
+        run_stat_callback('date_sources', target_date_assigned_from, original_path)
 
     if target_date.year in DEFAULT_YEARS:
         logger.warn(" - target date almost surely invalid (%s)" % (datetime.strftime(target_date, "%Y-%m-%d")))
-        run_stat_callback('anomalies', 'no-valid-date', sourcefile.original_path)
+        if run_stat_callback:
+            run_stat_callback('anomalies', 'no-valid-date', original_path)
 
     # -- atime/mtime are by default what is already on the file
     # -- we want to avoid changing this unless it's completely wrong
@@ -151,18 +166,21 @@ def get_target_date(sourcefile, run_stat_callback):
 
     # -- if we've extracted a date from the filename (not path) and that date is different than the settled date
     # -- we're going to rename the file to match
-    if target_date_from_filename and target_date and (target_date_from_filename - target_date).total_seconds() > 1:
-        filename = sourcefile.original_path.rstrip('/').rpartition('/')[-1]
-        file_prefix = filename.split('_')[0]
-        file_suffix = filename.split('.')[-1]
-        new_filename_stamp = datetime.strftime(target_date, "%Y%m%d_%H%M%S")
-        new_filename = "%s_%s.%s" %(file_prefix, new_filename_stamp, file_suffix)
-        logger.warn(" - timestamp extracted from filename does not match calculated timestamp, renaming %s -> %s" % (filename, new_filename))
-        run_stat_callback('anomalies', 'filename-date-incorrect', sourcefile.original_path)
+    # if target_date_from_filename and target_date and (target_date_from_filename - target_date).total_seconds() > 1:
+    #     filename = original_path.rstrip('/').rpartition('/')[-1]
+    #     file_prefix = filename.split('_')[0]
+    #     file_suffix = filename.split('.')[-1]
+    #     millisecond = datetime.strftime(target_date, "%f")[0:3]
+    #     new_filename_stamp = datetime.strftime(target_date, "%Y%m%d_%H%M%S")
+    #     new_filename = "%s_%s%s.%s" %(file_prefix, new_filename_stamp, millisecond, file_suffix)
+    #     logger.warn(" - timestamp extracted from filename does not match calculated timestamp, renaming %s -> %s" % (filename, new_filename))
+    #     if run_stat_callback:
+    #         run_stat_callback('anomalies', 'filename-date-incorrect', original_path)
 
     # -- same deal as above but with the date found in the path, and we're just logging the fact, not renaming the folder
     if target_date_from_path and datetime.strftime(target_date_from_path, "%Y-%m-%d") != datetime.strftime(target_date, "%Y-%m-%d"):
         logger.warn(" - date extracted from path %s does not match calculated date %s" % (datetime.strftime(target_date_from_path, "%Y-%m-%d"), datetime.strftime(target_date, "%Y-%m-%d")))
-        run_stat_callback('anomalies', 'path-date-incorrect', sourcefile.original_path)
+        if run_stat_callback:
+            run_stat_callback('anomalies', 'path-date-incorrect', original_path)
 
     return (target_date, target_atime, target_mtime, new_filename, target_date_assigned_from,)
