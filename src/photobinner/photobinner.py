@@ -22,6 +22,7 @@ from utils.dates import get_target_date
 from utils.stats import PhotoStats
 from utils.pathing import calculate_target_folder
 from utils.common import hash_equal
+from pbdb import PbDb
 
 '''
 If debug, show file heading and any indented debug lines for all files
@@ -87,15 +88,32 @@ class PhotoBinner(object):
     transfer_method = DEFAULT_TRANSFER_METHOD
     stats = None 
 
+    pbdb = None
+
     def __init__(self, *args, **kwargs):
+        
+        dbConfig = {
+            'host': None,
+            'user': None,
+            'password': None,
+            'name': None 
+        }
+        
         for k in kwargs:
             logger.debug("Setting %s -> %s" % (k, kwargs[k]))
-            self.__setattr__(k, kwargs[k])
+            if k in dbConfig.keys():
+                dbConfig[k] = kwargs[k]
+            else:
+                self.__setattr__(k, kwargs[k])
+
         for v in [ v for v in dir(self) if v.find("_") != 0 ]:
             t = type(self.__getattribute__(v))
-            if t in [str, int, bool, str] or not t:
+            if t in [str, int, bool] or not t:
                 logger.debug("%s: %s" % (v, self.__getattribute__(v)))
+        
+        self.pbdb = PbDb(**dbConfig)
         self.stats = PhotoStats(operator_uid=OWNER_UID)
+
         self._initialize()
 
     def move(self, src, dest, time_tuple=None):
@@ -281,14 +299,25 @@ class PhotoBinner(object):
                 # -- if self.user_source doesn't match a preconfigured source
                 # -- interpret it as a path on-disk
                 mountpoint = os.path.abspath(self.user_source)
-                source_folder = self.source_types['Folder'](
-                    type='Folder',
-                    mountpoint=mountpoint,
-                    transfer_method=self.move if self.transfer_method == 'move' else self.copy,
-                    exclude_descriptive=self.exclude_descriptive.split(','),
-                    target=self.target_base_folder
-                )
-                self.attempt_sources[mountpoint] = source_folder
+                new_source = None
+                if mountpoint and os.path.isfile(mountpoint):
+                    new_source = self.source_types['SingleFile'](
+                        type='SingleFile',
+                        mountpoint=mountpoint,
+                        transfer_method=self.move if self.transfer_method == 'move' else self.copy,
+                        exclude_descriptive=self.exclude_descriptive.split(','),
+                        target=self.target_base_folder    
+                    )
+                else:
+                    new_source = self.source_types['Folder'](
+                        type='Folder',
+                        mountpoint=mountpoint,
+                        transfer_method=self.move if self.transfer_method == 'move' else self.copy,
+                        exclude_descriptive=self.exclude_descriptive.split(','),
+                        target=self.target_base_folder
+                    )
+                if new_source is not None:
+                    self.attempt_sources[mountpoint] = new_source
         else:
             for s in list(self.aux_sources.keys()):
                 self.attempt_sources[s] = self.aux_sources[s]
@@ -402,46 +431,32 @@ class PhotoBinner(object):
                 logger.fatal("Noticed sigint in main loop, breaking..")
                 break
             run_stat = { 'source': s, 'start': datetime.strftime(datetime.now(), "%Y-%m-%dT%H:%M:%S"), 'file_count': 0 }
-            try:
-                if source.mountpoint and os.path.isfile(source.mountpoint):
-                    logger.info("Processing single file %s " % source.mountpoint)
+            try:               
+                logger.info("Processing paths from source..")
+                for sf in source.paths():
+                    if self.sigint:
+                        break
                     try:
-                        sourcefile = SourceFile(source.mountpoint)
-                        self._process_file(source=source, sourcefile=sourcefile)
-                        run_stat['file_count'] += 1
-                        self.stats.append_processed_file(s, sourcefile.original_path)
-                        source.processed_files.append(source.mountpoint)
+                        if isinstance(sf, StitchFolder):
+                            self._process_stitch_folder(source=source, stitch_folder=sf)
+                        else:
+                            if self.stats.is_source_file_processed(s, sf.original_path):
+                                logger.info(" - [%s] %s found as processed, skipping.." % (s, sf.original_path))
+                                continue 
+                            self._process_file(source=source, sourcefile=sf)
+                            run_stat['file_count'] += 1
+                            self.stats.append_processed_file(s, sf.original_path)
+                            source.processed_files.append(sf.original_path)
+                            if count > 0:
+                                count -= 1
+                            if count == 0:
+                                logger.info("Smoke test limit (%s) reached" % self.smoke_test)
+                                break
                     except:
-                        logger.error("Exception caught processing file: %s" % source.mountpoint)
+                        logger.error("Exception caught processing file: %s (%s)" % (sf.working_path, sf.original_path))
                         logger.error(str(sys.exc_info()[0]))
                         logger.error(str(sys.exc_info()[1]))
                         traceback.print_tb(sys.exc_info()[2])
-                else:
-                    logger.info("Processing paths from source..")
-                    for sf in source.paths():
-                        if self.sigint:
-                            break
-                        try:
-                            if isinstance(sf, StitchFolder):
-                                self._process_stitch_folder(source=source, stitch_folder=sf)
-                            else:
-                                if self.stats.is_source_file_processed(s, sf.original_path):
-                                    logger.info(" - [%s] %s found as processed, skipping.." % (s, sf.original_path))
-                                    continue 
-                                self._process_file(source=source, sourcefile=sf)
-                                run_stat['file_count'] += 1
-                                self.stats.append_processed_file(s, sf.original_path)
-                                source.processed_files.append(sf.original_path)
-                                if count > 0:
-                                    count -= 1
-                                if count == 0:
-                                    logger.info("Smoke test limit (%s) reached" % self.smoke_test)
-                                    break
-                        except:
-                            logger.error("Exception caught processing file: %s (%s)" % (sf.working_path, sf.original_path))
-                            logger.error(str(sys.exc_info()[0]))
-                            logger.error(str(sys.exc_info()[1]))
-                            traceback.print_tb(sys.exc_info()[2])
             except:
                 run_stat['exception'] = str(sys.exc_info()[1])
                 run_stat['stack_trace'] = str(traceback.extract_tb(sys.exc_info()[2]))

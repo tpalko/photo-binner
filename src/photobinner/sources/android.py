@@ -55,7 +55,7 @@ class Android(Source):
                     logger.info(f'Found IP address configured for this device: {self.ip_address}')
                     logger.info("Attempting TCP device connection at %s.." % self.ip_address)
                     try:
-                        self.device = AdbDeviceTcp(self.ip_address, 5037, default_transport_timeout_s=9.0)
+                        self.device = AdbDeviceTcp(host=self.ip_address, port=5037, default_transport_timeout_s=9.0)
                         # print("AdbDeviceTcp..")
                         # print(dir(self.device))
                         # logger.info("available..")
@@ -124,6 +124,7 @@ class Android(Source):
         device = self._get_device()
         return device
 
+    # -- abstract
     def verify(self):                
         device = self._get_device()
         if not device.available:
@@ -167,6 +168,7 @@ class Android(Source):
         logger.warn("Files {}found. Device {} scanning all source paths.".format("" if any_files else "not", "succeeded" if device_success else "failed"))
         return any_files and device_success
 
+    # -- abstract
     def paths(self):
         logger.info("source locations: %s" % ",".join(self.files.keys()))
         device = self._get_device()
