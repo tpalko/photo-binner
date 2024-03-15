@@ -187,7 +187,38 @@ how the session file is parsed when selected and that all sources are accounted 
 
 ## Future Work
 
-### Current 
+### March 2024
+
+Priorities:
+
+* move processing history and other now-session data into an RDBMS, handle this information more intelligently and do away with the idea of sessions
+* fix logging - system logging + user logging, as per bckt
+* source type loading, source/config parsing, user source selection, and source verification actually aren't in a bad place
+* define some paramters:
+  - we care about the binary data regardless of source
+  - we track historical results of each source encounter
+* fix the pipeline:
+  - gather facts as much as possible
+    - original source path + name
+    - any metadata
+    - size
+    - sha
+  - check history and historical result
+    - if this file has never been handled, handle it
+    - if this file has been handled successfully before, record the encounter and quit
+    - if this file has only been handled unsuccessfully, check the reason
+      - corrupt, copy error: try again
+      - found a duplicate: if this is the only result, it's a bug. handling attempts that find a duplicate should mark a successful copy
+    
+  - handle timestamps correctly
+    - correctly determine the timestamp of the actual image - when it was taken, correctly timezoned
+    - figure out how the industry handles timezones on images, in metadata, and in file naming 
+    - apply metadata and file name changes - this should be rare, actually
+  - determine the target date folder 
+  - check existince of the binary file - by name or sha - anywhere in the target and respond appropriately
+
+### Current (when was this??)
+
 - Pixel image naming is in the format PXL_YYYYMMDD_HHMMSSSSS.jpg in UTC. The program currently will catch this and rename files
 replacing the nine-digit time with the six-digit "HHMMSS" in local time. This may be more accurate, but is not always (pictures
 taken in different timezones, and location may be embedded in the image) and so this step is at best unnecessary and at worst 

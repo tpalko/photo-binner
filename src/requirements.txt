@@ -1,0 +1,8 @@
+Click
+pytz
+simplejson
+exifread
+adb-shell
+adb-shell[usb]
+-e ../cowpy
+-e ../../projects/frank-common

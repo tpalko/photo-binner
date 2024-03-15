@@ -1,5 +1,0 @@
-Click
-pytz
-exifread
-adb-shell
-adb-shell[usb]
