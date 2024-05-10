@@ -1,0 +1,23 @@
+{   
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "level": "DEBUG",
+            "format": "Format.DETAILED"
+        },
+    },
+    "root": {
+        "handlers": ["console"],
+        "level": "DEBUG",
+    },
+    "loggers": {
+        "database": {
+            "handlers": ["console"],
+            "level": "DEBUG",
+        },
+        "pb": {
+            "handlers": ["console"],
+            "level": "DEBUG",
+        },
+    }
+}

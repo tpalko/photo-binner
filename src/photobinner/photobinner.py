@@ -5,11 +5,11 @@ import sys
 import signal
 from datetime import datetime, timedelta
 import click
-import logging
+import cowpy
 import re
 import shutil
 import pprint
-import json
+# import json
 #import importlib
 import glob
 from configparser import ConfigParser
@@ -22,7 +22,9 @@ from utils.dates import get_target_date
 from utils.stats import PhotoStats
 from utils.pathing import calculate_target_folder
 from utils.common import hash_equal
-from pbdb import PbDb
+from datetime import datetime 
+from frank.database.database import Database, DatabaseConfig
+from pbdb import Image, EncounterStatus, Session, Source, Target, Encounter
 
 '''
 If debug, show file heading and any indented debug lines for all files
@@ -36,7 +38,7 @@ at the beginning of the loop - it is shown not based on log level but based on
 future knowledge.
 '''
 
-logger = logging.getLogger(__name__)
+logger = cowpy.getLogger()
 
 config = ConfigParser()
 pb_config = os.path.expanduser('~/.pbrc')
@@ -88,7 +90,7 @@ class PhotoBinner(object):
     transfer_method = DEFAULT_TRANSFER_METHOD
     stats = None 
 
-    pbdb = None
+    db = None
 
     def __init__(self, *args, **kwargs):
         
@@ -111,7 +113,8 @@ class PhotoBinner(object):
             if t in [str, int, bool] or not t:
                 logger.debug("%s: %s" % (v, self.__getattribute__(v)))
         
-        self.pbdb = PbDb(**dbConfig)
+        self.db = Database(config=DatabaseConfig.NewMariadb(**dbConfig))
+
         self.stats = PhotoStats(operator_uid=OWNER_UID)
 
         self._initialize()
@@ -140,7 +143,7 @@ class PhotoBinner(object):
     sde    058F63626376
       sde1              0782-073F                                     EOS_DIGITAL
     '''
-
+    
     def _determine_move_action(self, sourcefile, target_folder, filename):
         '''
         Compare initial and target paths, notice and compare any existing files, determine final target and if move/copy action should be taken.
@@ -430,9 +433,20 @@ class PhotoBinner(object):
             if self.sigint:
                 logger.fatal("Noticed sigint in main loop, breaking..")
                 break
-            run_stat = { 'source': s, 'start': datetime.strftime(datetime.now(), "%Y-%m-%dT%H:%M:%S"), 'file_count': 0 }
+            
+            source_record = Source(name=s)
+            source_record.upsert(name=s)
+
+            target = Target(name=source.target)
+            target.upsert(name=source.target)
+
+            run_stat = { 'source': source_record.id, 'target': target.id, 'start': datetime.strftime(datetime.now(), "%Y-%m-%dT%H:%M:%S"), 'file_count': 0 }
+            
+            session = Session(parameters_json=run_stat)
+            session.save(self.db)
+            
             try:               
-                logger.info("Processing paths from source..")
+                logger.info(f'Processing paths from source {source_record.name} ({source_record.id})..')
                 for sf in source.paths():
                     if self.sigint:
                         break
@@ -440,13 +454,28 @@ class PhotoBinner(object):
                         if isinstance(sf, StitchFolder):
                             self._process_stitch_folder(source=source, stitch_folder=sf)
                         else:
-                            if self.stats.is_source_file_processed(s, sf.original_path):
+
+                            image = Image(original_source_id=source_record.id, original_filepath=sf.original_path, size_kb=sf.size_kb, md5=sf.md5)
+                            image.upsert(self.db, md5=image.md5)            
+                            
+                            encounters = Encounter.get(self.db, source_id=source_record.id, target_id=target.id, image_id=image.id, status=EncounterStatus.COMPLETE)
+
+                            if len(encounters) > 0:
+                            # if self.stats.is_source_file_processed(s, sf.original_path):
                                 logger.info(" - [%s] %s found as processed, skipping.." % (s, sf.original_path))
                                 continue 
+
+                            encounter = Encounter(source_id=source_record.id, target_id=target.id, image_id=image.id)
+                            encounter.save()
+
                             self._process_file(source=source, sourcefile=sf)
-                            run_stat['file_count'] += 1
-                            self.stats.append_processed_file(s, sf.original_path)
-                            source.processed_files.append(sf.original_path)
+                            session.parameters_json['file_count'] += 1                            
+                            # run_stat['file_count'] += 1
+                            encounter.status = EncounterStatus.COMPLETE
+                            encounter.save()
+
+                            # self.stats.append_processed_file(s, sf.original_path)
+                            # source.processed_files.append(sf.original_path)
                             if count > 0:
                                 count -= 1
                             if count == 0:
@@ -465,14 +494,18 @@ class PhotoBinner(object):
                 traceback.print_tb(sys.exc_info()[2])
 
             logger.info("Closing the run..")
-            run_stat['stop'] = datetime.strftime(datetime.now(), "%Y-%m-%dT%H:%M:%S")            
-            self.stats.append_run_stat(run_stat)
+            session.parameters_json['end'] = datetime.strftime(datetime.now(), "%Y-%m-%dT%H:%M:%S")
+            session.save()
+            # run_stat['stop'] = datetime.strftime(datetime.now(), "%Y-%m-%dT%H:%M:%S")            
+            # self.stats.append_run_stat(run_stat)
 
         # logger.info("Capturing processed files from sources..")
         # for s in list(self.verified_sources.keys()):
         #     self.stats.set_session_processed_files(s, self.verified_sources[s].processed_files)            
 
-        self.stats.write_out()
+        # self.stats.write_out()
+        
+        print(session)
 
         logger.info("All operations complete.")
 
@@ -501,7 +534,7 @@ def main(user_source, target, mask, from_date, preserve_folders, exclude_descrip
     #     target defaults to DEFAULT_TARGET but can be overwritten
     # 'sort' means organizing into year/date tree, and this implies "fixing" an existing, possibly incorrect, year/date tree
 
-    logging.basicConfig(level=logging._nameToLevel[loglevel.upper()])
+    # logging.basicConfig(level=logging._nameToLevel[loglevel.upper()])
 
     cfg = {
         'dry_run': dry_run,
@@ -514,7 +547,11 @@ def main(user_source, target, mask, from_date, preserve_folders, exclude_descrip
         'from_date': from_date,
         'exact_matches_folder': EXACT_MATCHES_FOLDER,
         'user_source': user_source,
-        'transfer_method': transfer_method
+        'transfer_method': transfer_method,
+        'host': 'frankendeb',
+        'user': 'photobinner',
+        'password': 'photobinner',
+        'name': 'photobinner'
     }
 
     pb = PhotoBinner(**cfg)

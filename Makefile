@@ -21,9 +21,19 @@ PREMAJOR := true
 STD_VER_PARAMS := --preMajor $(PREMAJOR) -a --path ./src/frank --tag-prefix $(TAG_PREFIX)
 STD_VER_WET_PARAMS := --releaseCommitMessageFormat="release {{currentTag}}" --header "\# Changelog"
 
+ENV ?= dev
+
+include env/${ENV}.env 
+export $(shell sed 's/=.*//' env/${ENV}.env)
+
+dbshell = mariadb -u ${DB_USER} -h ${DB_HOST} ${DB_DATABASE} -p${DB_PASSWORD}
+
 define version
 	standard-version $(DRY_RUN_PARAM) $(STD_VER_PARAMS) $(STD_VER_WET_PARAMS)
 endef 
+
+sql:
+	$(call dbshell)
 
 venv-reset:
 	. $(VENV_WRAPPER) \

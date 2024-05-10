@@ -193,10 +193,25 @@ Priorities:
 
 * move processing history and other now-session data into an RDBMS, handle this information more intelligently and do away with the idea of sessions
 * fix logging - system logging + user logging, as per bckt
-* source type loading, source/config parsing, user source selection, and source verification actually aren't in a bad place
-* define some paramters:
-  - we care about the binary data regardless of source
-  - we track historical results of each source encounter
+* how to track and optimize
+  - use cases
+    - we care about the binary data regardless of source
+    - we track historical results of each source encounter
+    - we don't change the source file in any way (name, metadata) but instead record observations as annotations in the database 
+    - one source file can have multiple targets, therefore multiple canonical locations and statuses
+  - pipeline:
+    - obtain some unique fingerprint, md5 etc. 
+    - lookup fingerprint in database, find encounters, expected locations and status of the file for the target(s) in question
+    - find instances of the file in target(s)
+    - determine how to proceed
+    - record encounter
+  - model
+    - see pbdb.py
+  - output:
+    - stats: 
+      - number moved/copied/duplicate per source, # per target folder (per source)
+      - start/end date brackets of files processed / actioned 
+      
 * fix the pipeline:
   - gather facts as much as possible
     - original source path + name

@@ -4,6 +4,7 @@ import subprocess
 import logging
 import re
 from abc import ABCMeta, abstractmethod
+from utils.common import md5
 
 # - some pics/ folders are outside the purview of sorting/fixing scripts
 FIX_EXCLUDES = [
@@ -25,10 +26,15 @@ class SourceFile():
 
     original_path = None
     working_path = None
+    md5 = None 
+    size_kb = None 
 
     def __init__(self, *args, **kwargs):
         self.original_path = args[0]
         self.working_path = args[1] if len(args) > 1 else self.original_path
+        self.md5 = md5(self.working_path)
+        file_stats = os.stat(self.working_path)
+        self.size_kb = float(file_stats.st_size) / 1024
 
 class StitchFolder(SourceFile):
     pass
